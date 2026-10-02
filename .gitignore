@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.gemini/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Uploads
+uploads/
+
+# Models (large binary files)
+models/face/*.onnx
+models/face/*.tflite
+
+# Logs
+*.log
+
+# Database
+*.db
+*.sqlite3
+
+# Node
+node_modules/

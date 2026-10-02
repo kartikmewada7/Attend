@@ -1,0 +1,12 @@
+AttendAI frontend quick setup
+
+1. Copy .env.example to .env.
+2. Set VITE_API_BASE_URL to your FastAPI /api URL.
+3. npm install
+4. npm run dev
+
+For phone testing on the same Wi-Fi, use the laptop LAN IP in .env and run Vite with host 0.0.0.0.
+The UI does not disable browser pinch zoom and includes A-/A+ controls.
+
+
+Security note: public teacher registration UI has been removed. Create teacher accounts through the administrator/database workflow.
