@@ -5,7 +5,12 @@ import "./styles.css";
 
 const API = (() => {
   const configured = (import.meta.env.VITE_API_BASE_URL || "").trim();
-  if (configured) return configured.replace(/\/$/, "");
+
+  if (configured) {
+    const base = configured.replace(/\/+$/, "");
+    return base.endsWith("/api") ? base : `${base}/api`;
+  }
+
   const host = window.location.hostname || "127.0.0.1";
   return `http://${host}:8000/api`;
 })();
