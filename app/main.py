@@ -34,11 +34,31 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AI Face Recognition Attendance API", version="5.0.0", lifespan=lifespan)
+app = FastAPI(title="AI Face Recognition Attendance API", version="5.0.1", lifespan=lifespan)
 
 origins = [i.strip() for i in settings.CORS_ORIGINS.split(",") if i.strip()]
 
-# Add CORS middleware with both explicit origins and regex for all http/https origins
+
+@app.middleware("http")
+async def cors_fallback_middleware(request: Request, call_next):
+    origin = request.headers.get("origin")
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.exception("Error processing %s %s: %s", request.method, request.url, exc)
+        response = JSONResponse(
+            status_code=500,
+            content={"detail": str(exc) or "Internal server error"},
+        )
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
+
+# Add standard CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins or ["*"],

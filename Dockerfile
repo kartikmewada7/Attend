@@ -6,9 +6,13 @@ ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# System dependencies for OpenCV & MediaPipe
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+# System dependencies for dlib / face-recognition / OpenCV
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    libopenblas-dev \
+    liblapack-dev \
+    libx11-dev \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -24,12 +28,6 @@ RUN pip install --upgrade pip && \
 COPY app ./app
 COPY models ./models
 COPY scripts ./scripts
-
-# Download face detection and recognition models if not already in context
-RUN mkdir -p models/face && \
-    ([ -f models/face/blaze_face_short_range.tflite ] && [ -s models/face/blaze_face_short_range.tflite ]) || curl -fsSL -o models/face/blaze_face_short_range.tflite https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite && \
-    ([ -f models/face/face_detection_yunet_2023mar.onnx ] && [ -s models/face/face_detection_yunet_2023mar.onnx ]) || curl -fsSL -o models/face/face_detection_yunet_2023mar.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx && \
-    ([ -f models/face/face_recognition_sface_2021dec.onnx ] && [ -s models/face/face_recognition_sface_2021dec.onnx ]) || curl -fsSL -o models/face/face_recognition_sface_2021dec.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
 
 EXPOSE 8080
 

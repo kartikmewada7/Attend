@@ -85,13 +85,10 @@ def teacher_register_verify(payload: TeacherVerifyRequest, db: Session = Depends
 def teacher_login_request(payload: TeacherOTPRequest, db: Session = Depends(get_db)):
     require_org(payload.email); email=normalize_email(str(payload.email)); teacher=db.scalar(select(Teacher).where(Teacher.email==email,Teacher.is_verified.is_(True),Teacher.is_active.is_(True)))
     if not teacher: raise HTTPException(404,"Teacher account not found. Register first.")
-    try:
-        issue_otp(db, email, "teacher_login", "teacher login")
-    except ValueError as e:
-        raise HTTPException(429, str(e))
-    except Exception as e:
-        raise HTTPException(503, f"Unable to send OTP: {e}")
-    return {"message": "Login OTP sent"}
+    try: issue_otp(db,email,"teacher_login","teacher login")
+    except ValueError as e: raise HTTPException(429,str(e))
+    except RuntimeError as e: raise HTTPException(503,str(e))
+    return {"message":"Login OTP sent"}
 
 @router.post("/teacher/login/verify", response_model=TokenOut)
 def teacher_login_verify(payload: TeacherOTPVerify, db: Session = Depends(get_db)):
