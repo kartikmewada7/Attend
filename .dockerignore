@@ -1,0 +1,14 @@
+.venv
+.git
+.env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+
+attendAI-frontend/node_modules
+attendAI-frontend/dist
+
+uploads/*
