@@ -26,7 +26,6 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
 COPY app ./app
-COPY models ./models
 COPY scripts ./scripts
 
 EXPOSE 8080
