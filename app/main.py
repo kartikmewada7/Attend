@@ -1,9 +1,8 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.database import engine
@@ -34,56 +33,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AI Face Recognition Attendance API", version="5.0.1", lifespan=lifespan)
+app = FastAPI(title="AI Face Recognition Attendance API", version="5.0.0", lifespan=lifespan)
 
 origins = [i.strip() for i in settings.CORS_ORIGINS.split(",") if i.strip()]
-
-
-@app.middleware("http")
-async def cors_fallback_middleware(request: Request, call_next):
-    origin = request.headers.get("origin")
-    try:
-        response = await call_next(request)
-    except Exception as exc:
-        logger.exception("Error processing %s %s: %s", request.method, request.url, exc)
-        response = JSONResponse(
-            status_code=500,
-            content={"detail": str(exc) or "Internal server error"},
-        )
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-    return response
-
-
-# Add standard CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins or ["*"],
-    allow_origin_regex=r"^https?://.*",
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled error on %s %s: %s", request.method, request.url, exc)
-    origin = request.headers.get("origin", "*")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": str(exc) or "Internal server error"},
-        headers={
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        },
-    )
-
 
 app.include_router(health.router)
 app.include_router(auth.router)
