@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = ""
     SMTP_FROM_NAME: str = "AttendAI"
     SMTP_USE_TLS: bool = True
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = "onboarding@resend.dev"
     OTP_EXPIRE_MINUTES: int = 10
     OTP_RESEND_SECONDS: int = 60
 
