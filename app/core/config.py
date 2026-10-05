@@ -22,13 +22,13 @@ class Settings(BaseSettings):
     RESEND_FROM_EMAIL: str = "onboarding@resend.dev"
 
     # SMTP fallback
-    SMTP_HOST: str = "smtp.gmail.com"
-    SMTP_PORT: int = 587
-    SMTP_USERNAME: str = ""
-    SMTP_PASSWORD: str = ""
-    SMTP_FROM_EMAIL: str = ""
-    SMTP_FROM_NAME: str = "AttendAI"
-    SMTP_USE_TLS: bool = True
+    #SMTP_HOST: str = "smtp.gmail.com"
+    #SMTP_PORT: int = 587
+    #SMTP_USERNAME: str = ""
+    #SMTP_PASSWORD: str = ""
+    #SMTP_FROM_EMAIL: str = ""
+    #SMTP_FROM_NAME: str = "AttendAI"
+    #SMTP_USE_TLS: bool = True
 
     OTP_EXPIRE_MINUTES: int = 10
     OTP_RESEND_SECONDS: int = 60
