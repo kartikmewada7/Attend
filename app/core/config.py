@@ -4,7 +4,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/attendance_db"
     REDIS_URL: str = "redis://localhost:6379/0"
     SECRET_KEY: str = "replace-with-a-long-random-secret"
-    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,https://attendai.kartikmewada168.workers.dev"
+    CORS_ORIGINS: str = "https://attendai.kartikmewada168.workers.dev"
 
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
