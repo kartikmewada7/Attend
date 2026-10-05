@@ -1,9 +1,11 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.database import engine
@@ -111,6 +113,32 @@ app.include_router(assignments.router)
 app.include_router(marks.router)
 
 
-@app.get("/")
-def root():
-    return {"message": "Attendance Management API is running", "docs": "/docs", "health": "/api/health"}
+# ==========================================
+# FRONTEND SERVING LOGIC (SPA)
+# ==========================================
+
+# Directory path jahan frontend ka build (dist) rakha hoga
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Check if static folder exists (Docker me build hone ke baad ye exist karega)
+if os.path.exists(STATIC_DIR):
+    
+    # 1. Vite ke 'assets' folder (JS/CSS) ko mount karein
+    assets_dir = os.path.join(STATIC_DIR, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    # 2. Catch-all route to serve the React/Vite SPA aur files
+    @app.get("/{catchall:path}")
+    async def serve_frontend(catchall: str):
+        # API aur Docs ke broken requests par HTML serve karne se rokein
+        if catchall.startswith("api/") or catchall in ["docs", "openapi.json", "redoc"]:
+            return JSONResponse(status_code=404, content={"detail": "API Route Not Found"})
+        
+        # Agar koi direct file mangi gayi hai (jaise favicon.ico, logo.png)
+        file_path = os.path.join(STATIC_DIR, catchall)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+            
+        # Baaki sabhi frontend routes ke liye index.html return karein (React Router handle karega)
+        index_path = os.path.join(STATIC_
