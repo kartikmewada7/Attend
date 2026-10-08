@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sqlalchemy.orm import Session
 
@@ -1524,8 +1525,8 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             continue
 
         # Prevent duplicate daily summary emails.
-        # Reuse an existing PENDING/FAILED record on retries. The database
-        # has a unique constraint for student + email_type + reference_date.
+        # Use PostgreSQL ON CONFLICT DO NOTHING so a retry/concurrent cron
+        # execution can never crash the whole endpoint with UniqueViolation.
         existing = db.scalar(
             select(AttendanceEmailLog).where(
                 AttendanceEmailLog.student_id == student.id,
@@ -1533,6 +1534,7 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
                 AttendanceEmailLog.reference_date == summary_date,
             )
         )
+
         if existing and existing.status == "SENT":
             skipped += 1
             continue
@@ -1558,15 +1560,47 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             log.status = "PENDING"
             log.error_message = None
         else:
-            log = AttendanceEmailLog(
-                student_id=student.id,
-                attendance_id=None,
-                email_type="DAILY_SUMMARY",
-                reference_date=summary_date,
-                email_address=student.email,
-                status="PENDING",
+            stmt = (
+                pg_insert(AttendanceEmailLog)
+                .values(
+                    student_id=student.id,
+                    attendance_id=None,
+                    email_type="DAILY_SUMMARY",
+                    reference_date=summary_date,
+                    email_address=student.email,
+                    status="PENDING",
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[
+                        "student_id",
+                        "email_type",
+                        "reference_date",
+                    ]
+                )
             )
-            db.add(log)
+            db.execute(stmt)
+            db.flush()
+
+            # The row may have been inserted by this request or already
+            # existed from another/repeated cron execution.
+            log = db.scalar(
+                select(AttendanceEmailLog).where(
+                    AttendanceEmailLog.student_id == student.id,
+                    AttendanceEmailLog.email_type == "DAILY_SUMMARY",
+                    AttendanceEmailLog.reference_date == summary_date,
+                )
+            )
+            if log is None:
+                failed += 1
+                continue
+
+            if log.status == "SENT":
+                skipped += 1
+                continue
+
+            log.email_address = student.email
+            log.status = "PENDING"
+            log.error_message = None
 
         db.flush()
 
