@@ -332,132 +332,6 @@ function ManualAttendance() {
   </PageSection>;
 }
 
-function CameraCapture({
-  facingMode = "environment",
-  maxPhotos = 1,
-  onCapture,
-  capturedCount = 0,
-  disabled = false,
-}) {
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
-
-  const [open, setOpen] = useState(false);
-  const [cameraError, setCameraError] = useState("");
-  const [starting, setStarting] = useState(false);
-
-  async function openCamera() {
-    if (starting) return;
-
-    setCameraError("");
-    setStarting(true);
-
-    try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error(
-          "Camera API available nahi hai. HTTPS page par camera open karo."
-        );
-      }
-
-      // Stop any previous stream.
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: {
-            ideal: facingMode,
-          },
-          width: {
-            ideal: 1280,
-            min: 640,
-          },
-          height: {
-            ideal: 720,
-            min: 480,
-          },
-        },
-      });
-
-      streamRef.current = stream;
-
-      const video = videoRef.current;
-
-      if (!video) {
-        throw new Error("Camera video element ready nahi hai.");
-      }
-
-      video.srcObject = stream;
-      video.muted = true;
-      video.playsInline = true;
-      video.autoplay = true;
-
-      // Wait until browser has metadata/video dimensions.
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error("Camera video start hone mein timeout ho gaya."));
-        }, 10000);
-
-        const ready = () => {
-          clearTimeout(timeout);
-          video.removeEventListener("loadedmetadata", ready);
-          resolve();
-        };
-
-        video.addEventListener("loadedmetadata", ready);
-
-        if (video.readyState >= 1) {
-          ready();
-        }
-      });
-
-      await video.play();
-
-      setOpen(true);
-    } catch (error) {
-      console.error("Camera error:", error);
-
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-
-      let message =
-        "Camera open nahi ho paaya. Camera permission allow karke dobara try karo.";
-
-      if (error?.name === "NotAllowedError") {
-        message =
-          "Camera permission blocked hai. Browser/site settings mein Camera → Allow karo, phir page reload karo.";
-      } else if (error?.name === "NotFoundError") {
-        message = "Is device par camera nahi mila.";
-      } else if (error?.name === "NotReadableError") {
-        message =
-          "Camera kisi doosre application/browser tab mein use ho raha hai. Use close karke dobara try karo.";
-      } else if (error?.name === "OverconstrainedError") {
-        message =
-          "Camera resolution/facing-mode supported nahi hai. Dobara camera open karo.";
-      } else if (error?.message) {
-        message = error.message;
-      }
-
-      setCameraError(message);
-      setOpen(false);
-    } finally {
-      setStarting(false);
-    }
-  }
-
-  function closeCamera() {
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.srcObject = null;
-    }
-
-    setOpen(false);
-  }
-
  function CameraCapture({
   facingMode = "environment",
   maxPhotos = 1,
@@ -468,126 +342,205 @@ function CameraCapture({
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
-  const [open, setOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  const [cameraStatus, setCameraStatus] = useState("Camera closed");
   const [starting, setStarting] = useState(false);
 
-  async function openCamera() {
+  async function startCamera() {
     if (starting) return;
 
     setCameraError("");
     setStarting(true);
+    setCameraStatus("Starting camera...");
 
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(
-          "Camera API available nahi hai. HTTPS page par camera open karo."
+          "Browser camera API available nahi hai. HTTPS par app open karo."
         );
       }
 
-      // Purana stream stop karo
+      // Stop old stream if any.
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
 
-      // Simple constraints rakhe hain.
-      // facingMode ko ideal rakha hai taaki laptop/webcam par issue na ho.
       const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
         video: {
           facingMode: {
             ideal: facingMode,
           },
+          width: {
+            ideal: 1280,
+          },
+          height: {
+            ideal: 720,
+          },
         },
-        audio: false,
       });
+
+      const tracks = stream.getVideoTracks();
+
+      if (!tracks.length) {
+        throw new Error("Camera ne koi video track return nahi kiya.");
+      }
+
+      const track = tracks[0];
+
+      console.log("Camera track:", {
+        label: track.label,
+        enabled: track.enabled,
+        readyState: track.readyState,
+        settings: track.getSettings(),
+      });
+
+      if (track.readyState !== "live") {
+        throw new Error(
+          "Camera track live nahi hai. Camera kisi doosre application mein use ho sakta hai."
+        );
+      }
+
+      track.enabled = true;
 
       streamRef.current = stream;
 
       // IMPORTANT:
-      // Pehle video element ko render karvao.
-      setOpen(true);
-    } catch (error) {
-      console.error("Camera error:", error);
+      // video element hamesha DOM mein mounted hai.
+      const video = videoRef.current;
 
-      let message =
-        "Camera open nahi ho paaya. Browser camera permission check karo.";
-
-      if (error?.name === "NotAllowedError") {
-        message =
-          "Camera permission blocked hai. Browser settings mein Camera → Allow karo.";
-      } else if (error?.name === "NotFoundError") {
-        message = "Is device par camera nahi mila.";
-      } else if (error?.name === "NotReadableError") {
-        message =
-          "Camera kisi doosre application mein use ho raha hai. Use close karke dobara try karo.";
-      } else if (error?.name === "OverconstrainedError") {
-        message =
-          "Camera configuration supported nahi hai. Dobara try karo.";
-      } else if (error?.message) {
-        message = error.message;
+      if (!video) {
+        throw new Error("Video element available nahi hai.");
       }
 
-      setCameraError(message);
-      setOpen(false);
+      video.srcObject = stream;
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
+
+      setCameraOpen(true);
+      setCameraStatus("Camera connected. Starting preview...");
+
+      try {
+        await video.play();
+      } catch (playError) {
+        console.warn("Initial video.play() failed:", playError);
+      }
+
+      // Wait a little for the actual video frame.
+      setTimeout(async () => {
+        try {
+          if (video.srcObject !== stream) {
+            video.srcObject = stream;
+          }
+
+          if (video.paused) {
+            await video.play();
+          }
+
+          console.log("Video state:", {
+            readyState: video.readyState,
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight,
+            paused: video.paused,
+            ended: video.ended,
+          });
+
+          if (video.videoWidth > 0 && video.videoHeight > 0) {
+            setCameraStatus("Camera is live");
+          } else {
+            setCameraStatus(
+              "Camera connected, but video frame is not available."
+            );
+          }
+        } catch (error) {
+          console.error("Video start error:", error);
+          setCameraError(
+            "Camera connected hai, lekin video preview start nahi hua."
+          );
+        }
+      }, 500);
+
+      track.onended = () => {
+        console.warn("Camera track ended.");
+        setCameraOpen(false);
+        setCameraStatus("Camera stopped.");
+        setCameraError(
+          "Camera stream stop ho gaya. Camera ko dobara open karo."
+        );
+      };
+
+      track.onmute = () => {
+        console.warn("Camera track muted.");
+        setCameraStatus("Camera temporarily muted.");
+      };
+
+      track.onunmute = () => {
+        console.log("Camera track unmuted.");
+        setCameraStatus("Camera is live");
+      };
+    } catch (error) {
+      console.error("Camera start error:", error);
+
+      if (streamRef.current) {
+        streamRef.current
+          .getTracks()
+          .forEach((track) => track.stop());
+
+        streamRef.current = null;
+      }
+
+      setCameraOpen(false);
+
+      if (error?.name === "NotAllowedError") {
+        setCameraError(
+          "Camera permission blocked hai. Browser settings mein Camera → Allow karo."
+        );
+      } else if (error?.name === "NotFoundError") {
+        setCameraError(
+          "Camera device nahi mila."
+        );
+      } else if (error?.name === "NotReadableError") {
+        setCameraError(
+          "Camera kisi doosre application/tab mein use ho raha hai. Camera ko doosri app se close karo."
+        );
+      } else if (error?.name === "OverconstrainedError") {
+        setCameraError(
+          "Camera configuration supported nahi hai. Dobara try karo."
+        );
+      } else {
+        setCameraError(
+          error?.message ||
+            "Camera start nahi ho paaya."
+        );
+      }
+
+      setCameraStatus("Camera failed");
     } finally {
       setStarting(false);
     }
   }
 
-  // IMPORTANT:
-  // `open=true` hone ke BAAD video element DOM mein aata hai.
-  // Tab stream ko video ke srcObject mein attach karo.
-  useEffect(() => {
-    if (!open) return;
-
-    const video = videoRef.current;
-    const stream = streamRef.current;
-
-    if (!video || !stream) return;
-
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    video.autoplay = true;
-
-    const startVideo = async () => {
-      try {
-        await video.play();
-        console.log("Camera video started successfully");
-      } catch (error) {
-        console.error("Video play error:", error);
-        setCameraError(
-          "Camera stream mil gaya hai, lekin video preview start nahi ho paaya."
-        );
-      }
-    };
-
-    if (video.readyState >= 1) {
-      startVideo();
-    } else {
-      video.addEventListener("loadedmetadata", startVideo, {
-        once: true,
-      });
-    };
-
-    return () => {
-      video.removeEventListener("loadedmetadata", startVideo);
-    };
-  }, [open]);
-
-  function closeCamera() {
+  function stopCamera() {
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current
+        .getTracks()
+        .forEach((track) => track.stop());
+
       streamRef.current = null;
     }
 
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.srcObject = null;
+    const video = videoRef.current;
+
+    if (video) {
+      video.pause();
+      video.srcObject = null;
     }
 
-    setOpen(false);
+    setCameraOpen(false);
+    setCameraStatus("Camera closed");
     setCameraError("");
   }
 
@@ -595,13 +548,13 @@ function CameraCapture({
     const video = videoRef.current;
 
     if (!video) {
-      setCameraError("Camera video ready nahi hai.");
+      setCameraError("Video element available nahi hai.");
       return;
     }
 
     if (!video.videoWidth || !video.videoHeight) {
       setCameraError(
-        "Camera frame abhi ready nahi hai. 1–2 second wait karke dobara Capture Photo dabao."
+        "Live camera frame available nahi hai. Camera ko 2 seconds start hone do."
       );
       return;
     }
@@ -615,14 +568,14 @@ function CameraCapture({
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
-    const context = canvas.getContext("2d");
+    const ctx = canvas.getContext("2d");
 
-    if (!context) {
+    if (!ctx) {
       setCameraError("Photo capture nahi ho paaya.");
       return;
     }
 
-    context.drawImage(
+    ctx.drawImage(
       video,
       0,
       0,
@@ -652,7 +605,8 @@ function CameraCapture({
     );
   }
 
-  // Component completely unmount hone par camera stop karo.
+  // IMPORTANT:
+  // Camera component ke lifecycle ke saath cleanup.
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -668,48 +622,73 @@ function CameraCapture({
   return (
     <div className="camera-box">
 
-      {!open ? (
-        <button
-          type="button"
-          className="primary"
-          disabled={disabled || starting}
-          onClick={openCamera}
-        >
-          {starting
-            ? "Opening Camera..."
-            : "📷 Open Live Camera"}
-        </button>
-      ) : (
-        <>
+      {/* VIDEO ALWAYS EXISTS IN DOM */}
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "900px",
+          margin: "0 auto",
+          background: "#0b1728",
+          borderRadius: "14px",
+          overflow: "hidden",
+          position: "relative",
+        }}
+      >
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          style={{
+            width: "100%",
+            height: "auto",
+            minHeight: "360px",
+            display: "block",
+            objectFit: "cover",
+            background: "#0b1728",
+          }}
+        />
+
+        {!cameraOpen && (
           <div
             style={{
-              width: "100%",
-              maxWidth: 720,
-              margin: "0 auto",
-              borderRadius: 14,
-              overflow: "hidden",
-              background: "#0b1728",
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#fff",
+              fontSize: "18px",
+              pointerEvents: "none",
             }}
           >
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{
-                width: "100%",
-                display: "block",
-                aspectRatio: "16 / 9",
-                objectFit: "cover",
-                background: "#0b1728",
-              }}
-            />
+            Camera is closed
           </div>
+        )}
+      </div>
 
-          <div
-            className="toolbar"
-            style={{ marginTop: 12 }}
+      <div
+        style={{
+          marginTop: "12px",
+          display: "flex",
+          gap: "12px",
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        {!cameraOpen ? (
+          <button
+            type="button"
+            className="primary"
+            disabled={disabled || starting}
+            onClick={startCamera}
           >
+            {starting
+              ? "Opening Camera..."
+              : "📷 Open Live Camera"}
+          </button>
+        ) : (
+          <>
             <button
               type="button"
               className="primary"
@@ -725,22 +704,29 @@ function CameraCapture({
             <button
               type="button"
               className="link-btn"
-              onClick={closeCamera}
+              onClick={stopCamera}
             >
               Close Camera
             </button>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
+
+      <p className="hint">
+        {cameraStatus}
+      </p>
 
       <p className="hint">
         Captured: {capturedCount} / {maxPhotos}
       </p>
 
-      {cameraError && <Alert text={cameraError} />}
+      {cameraError && (
+        <Alert text={cameraError} />
+      )}
     </div>
   );
 }
+
 function FaceAttendance() {
   const [subs,setSubs]=useState([]),[selected,setSelected]=useState(""),[files,setFiles]=useState([]),[msg,setMsg]=useState(""),[result,setResult]=useState(null),[loading,setLoading]=useState(false);
 
