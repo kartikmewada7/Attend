@@ -341,81 +341,260 @@ function CameraCapture({
 }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+
   const [open, setOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  const [starting, setStarting] = useState(false);
 
   async function openCamera() {
+    if (starting) return;
+
     setCameraError("");
+    setStarting(true);
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          "Camera API available nahi hai. HTTPS page par camera open karo."
+        );
       }
+
+      // Stop any previous stream.
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: {
+            ideal: facingMode,
+          },
+          width: {
+            ideal: 1280,
+            min: 640,
+          },
+          height: {
+            ideal: 720,
+            min: 480,
+          },
+        },
+      });
+
+      streamRef.current = stream;
+
+      const video = videoRef.current;
+
+      if (!video) {
+        throw new Error("Camera video element ready nahi hai.");
+      }
+
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      video.autoplay = true;
+
+      // Wait until browser has metadata/video dimensions.
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Camera video start hone mein timeout ho gaya."));
+        }, 10000);
+
+        const ready = () => {
+          clearTimeout(timeout);
+          video.removeEventListener("loadedmetadata", ready);
+          resolve();
+        };
+
+        video.addEventListener("loadedmetadata", ready);
+
+        if (video.readyState >= 1) {
+          ready();
+        }
+      });
+
+      await video.play();
+
       setOpen(true);
-    } catch {
-      setCameraError("Camera open nahi ho paaya. Browser camera permission allow karke dobara try karo.");
+    } catch (error) {
+      console.error("Camera error:", error);
+
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+
+      let message =
+        "Camera open nahi ho paaya. Camera permission allow karke dobara try karo.";
+
+      if (error?.name === "NotAllowedError") {
+        message =
+          "Camera permission blocked hai. Browser/site settings mein Camera → Allow karo, phir page reload karo.";
+      } else if (error?.name === "NotFoundError") {
+        message = "Is device par camera nahi mila.";
+      } else if (error?.name === "NotReadableError") {
+        message =
+          "Camera kisi doosre application/browser tab mein use ho raha hai. Use close karke dobara try karo.";
+      } else if (error?.name === "OverconstrainedError") {
+        message =
+          "Camera resolution/facing-mode supported nahi hai. Dobara camera open karo.";
+      } else if (error?.message) {
+        message = error.message;
+      }
+
+      setCameraError(message);
+      setOpen(false);
+    } finally {
+      setStarting(false);
     }
   }
 
   function closeCamera() {
-    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+
     setOpen(false);
   }
 
   function capturePhoto() {
     const video = videoRef.current;
-    if (!video || !video.videoWidth || capturedCount >= maxPhotos) return;
+
+    if (!video) return;
+
+    if (!video.videoWidth || !video.videoHeight) {
+      setCameraError(
+        "Camera frame abhi ready nahi hai. 1–2 second wait karke dobara Capture Photo dabao."
+      );
+      return;
+    }
+
+    if (capturedCount >= maxPhotos) return;
 
     const canvas = document.createElement("canvas");
+
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    canvas.toBlob(blob => {
-      if (!blob) return;
-      onCapture(new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" }));
-    }, "image/jpeg", 0.90);
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      setCameraError("Photo capture nahi ho paaya.");
+      return;
+    }
+
+    context.drawImage(
+      video,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          setCameraError("Photo create nahi ho paaya.");
+          return;
+        }
+
+        const file = new File(
+          [blob],
+          `camera-${Date.now()}.jpg`,
+          {
+            type: "image/jpeg",
+          }
+        );
+
+        onCapture(file);
+      },
+      "image/jpeg",
+      0.9
+    );
   }
 
-  useEffect(() => () => {
-    streamRef.current?.getTracks().forEach(track => track.stop());
+  useEffect(() => {
+    return () => {
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
   }, []);
 
   return (
     <div className="camera-box">
+
       {!open ? (
-        <button type="button" className="primary" disabled={disabled} onClick={openCamera}>
-          📷 Open Live Camera
+        <button
+          type="button"
+          className="primary"
+          disabled={disabled || starting}
+          onClick={openCamera}
+        >
+          {starting
+            ? "Opening Camera..."
+            : "📷 Open Live Camera"}
         </button>
       ) : (
         <>
-          <div style={{width:"100%", maxWidth:720, margin:"0 auto", borderRadius:14, overflow:"hidden", background:"#0b1728"}}>
-            <video ref={videoRef} autoPlay playsInline muted
-              style={{width:"100%", display:"block", aspectRatio:"16 / 9", objectFit:"cover"}} />
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 720,
+              margin: "0 auto",
+              borderRadius: 14,
+              overflow: "hidden",
+              background: "#0b1728",
+            }}
+          >
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{
+                width: "100%",
+                display: "block",
+                aspectRatio: "16 / 9",
+                objectFit: "cover",
+                background: "#0b1728",
+              }}
+            />
           </div>
-          <div className="toolbar" style={{marginTop:12}}>
-            <button type="button" className="primary"
-              disabled={disabled || capturedCount >= maxPhotos}
-              onClick={capturePhoto}>
+
+          <div
+            className="toolbar"
+            style={{ marginTop: 12 }}
+          >
+            <button
+              type="button"
+              className="primary"
+              disabled={
+                disabled ||
+                capturedCount >= maxPhotos
+              }
+              onClick={capturePhoto}
+            >
               📸 Capture Photo
             </button>
-            <button type="button" className="link-btn" onClick={closeCamera}>Close Camera</button>
+
+            <button
+              type="button"
+              className="link-btn"
+              onClick={closeCamera}
+            >
+              Close Camera
+            </button>
           </div>
         </>
       )}
-      <p className="hint">Captured: {capturedCount} / {maxPhotos}</p>
-      {cameraError && <Alert text={cameraError} />}
+
+      <p className="hint">
+        Captured: {capturedCount} / {maxPhotos}
+      </p>
+
+      {cameraError && (
+        <Alert text={cameraError} />
+      )}
     </div>
   );
 }
