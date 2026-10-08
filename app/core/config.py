@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     BREVO_FROM_EMAIL: str = "kartikmewada168@gmail.com"
     BREVO_FROM_NAME: str = "AttendAI"
 
+    # Luxand.cloud face recognition / verification API
+    LUXAND_API_TOKEN: str = ""
+    LUXAND_COLLECTION: str = ""
+
     # Resend API (configured via environment variable or .env)
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "onboarding@resend.dev"

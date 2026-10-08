@@ -6,7 +6,7 @@ from app.cache import cache
 from app.database import get_db
 from app.deps import require_role
 from app.models import Student, Department, Semester, Section, Subject, SemesterSubject, Attendance, AttendanceSession, StudentFaceEmbedding
-from app.services.face_recognition import register_embedding
+from app.services.luxand import add_face, enroll_person, verification_passed, verify_person
 
 router = APIRouter(prefix="/api/student", tags=["Student Portal"])
 UPLOAD_DIR = Path("uploads/faces")
@@ -51,28 +51,110 @@ def me(user=Depends(require_role("student")), db: Session = Depends(get_db)):
 
 
 @router.post("/me/face")
-async def register_face(file: UploadFile = File(...), user=Depends(require_role("student")), db: Session = Depends(get_db)):
+async def register_face(
+    file: UploadFile = File(...),
+    user=Depends(require_role("student")),
+    db: Session = Depends(get_db),
+):
     if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(400, "Please upload an image")
+        raise HTTPException(400, "Please capture an image from the camera")
+
     data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty image")
     if len(data) > 5 * 1024 * 1024:
         raise HTTPException(400, "Image must be under 5 MB")
+
     s = db.get(Student, user["id"])
     if not s:
         raise HTTPException(404, "Student not found")
+
+    active_face = db.scalar(
+        select(StudentFaceEmbedding)
+        .where(
+            StudentFaceEmbedding.student_id == s.id,
+            StudentFaceEmbedding.is_active.is_(True),
+        )
+        .order_by(StudentFaceEmbedding.id.desc())
+    )
+
     try:
-        embedding, _, _ = register_embedding(data)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    db.query(StudentFaceEmbedding).filter(StudentFaceEmbedding.student_id == s.id).update({"is_active": False})
-    db.add(StudentFaceEmbedding(student_id=s.id, embedding=embedding, model_name="mediapipe+sface", is_active=True))
-    db.commit()
-    # Invalidate caches
+        if active_face and active_face.luxand_person_id:
+            # Re-registration: first verify the new live capture against
+            # the student's existing Luxand identity.
+            verification = await verify_person(
+                active_face.luxand_person_id,
+                data,
+                file.filename or "verify.jpg",
+            )
+            if not verification_passed(verification):
+                raise HTTPException(
+                    400,
+                    "Face verification failed. The captured face does not match your registered face.",
+                )
+
+            await add_face(
+                active_face.luxand_person_id,
+                data,
+                file.filename or "face.jpg",
+            )
+            active_face.model_name = "Luxand.cloud"
+            luxand_person_id = active_face.luxand_person_id
+        else:
+            # First registration: create a Luxand identity.
+            luxand_person_id = await enroll_person(
+                f"{s.enrollment_no} | {s.name}",
+                data,
+                file.filename or "face.jpg",
+            )
+
+            if active_face:
+                active_face.luxand_person_id = luxand_person_id
+                active_face.model_name = "Luxand.cloud"
+                active_face.embedding = None
+            else:
+                db.add(
+                    StudentFaceEmbedding(
+                        student_id=s.id,
+                        embedding=None,
+                        model_name="Luxand.cloud",
+                        luxand_person_id=luxand_person_id,
+                        is_active=True,
+                    )
+                )
+
+        # There must be exactly one active local record for this student.
+        db.query(StudentFaceEmbedding).filter(
+            StudentFaceEmbedding.student_id == s.id,
+            StudentFaceEmbedding.id != (active_face.id if active_face else -1),
+        ).update({"is_active": False})
+
+        if active_face:
+            active_face.is_active = True
+
+        db.commit()
+
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            502,
+            f"Luxand face service error: {exc}",
+        ) from exc
+
     cache.delete(f"student_profile:{s.id}")
     cache.delete_pattern("students:*")
     cache.delete_pattern("section_students:*")
     cache.delete_pattern("face_embeddings:*")
-    return {"message": "Face registered successfully", "face_registered": True, "updated": True}
+
+    return {
+        "message": "Face registered successfully with Luxand.",
+        "face_registered": True,
+        "updated": bool(active_face and active_face.luxand_person_id),
+        "verification_used": bool(active_face and active_face.luxand_person_id),
+    }
 
 
 @router.get("/me/attendance")

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import "./styles.css";
@@ -332,24 +332,148 @@ function ManualAttendance() {
   </PageSection>;
 }
 
+function CameraCapture({
+  facingMode = "environment",
+  maxPhotos = 1,
+  onCapture,
+  capturedCount = 0,
+  disabled = false,
+}) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+
+  async function openCamera() {
+    setCameraError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setOpen(true);
+    } catch {
+      setCameraError("Camera open nahi ho paaya. Browser camera permission allow karke dobara try karo.");
+    }
+  }
+
+  function closeCamera() {
+    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setOpen(false);
+  }
+
+  function capturePhoto() {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || capturedCount >= maxPhotos) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      onCapture(new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" }));
+    }, "image/jpeg", 0.90);
+  }
+
+  useEffect(() => () => {
+    streamRef.current?.getTracks().forEach(track => track.stop());
+  }, []);
+
+  return (
+    <div className="camera-box">
+      {!open ? (
+        <button type="button" className="primary" disabled={disabled} onClick={openCamera}>
+          📷 Open Live Camera
+        </button>
+      ) : (
+        <>
+          <div style={{width:"100%", maxWidth:720, margin:"0 auto", borderRadius:14, overflow:"hidden", background:"#0b1728"}}>
+            <video ref={videoRef} autoPlay playsInline muted
+              style={{width:"100%", display:"block", aspectRatio:"16 / 9", objectFit:"cover"}} />
+          </div>
+          <div className="toolbar" style={{marginTop:12}}>
+            <button type="button" className="primary"
+              disabled={disabled || capturedCount >= maxPhotos}
+              onClick={capturePhoto}>
+              📸 Capture Photo
+            </button>
+            <button type="button" className="link-btn" onClick={closeCamera}>Close Camera</button>
+          </div>
+        </>
+      )}
+      <p className="hint">Captured: {capturedCount} / {maxPhotos}</p>
+      {cameraError && <Alert text={cameraError} />}
+    </div>
+  );
+}
+
 function FaceAttendance() {
   const [subs,setSubs]=useState([]),[selected,setSelected]=useState(""),[files,setFiles]=useState([]),[msg,setMsg]=useState(""),[result,setResult]=useState(null),[loading,setLoading]=useState(false);
+
   useEffect(()=>{api("/attendance/subjects").then(setSubs).catch(e=>setMsg(e.message))},[]);
-  async function run(){if(!selected||!files.length)return;const s=subs.find(x=>String(x.id)===String(selected));const fd=new FormData();[...files].forEach(f=>fd.append("files",f));setLoading(true);setMsg("");try{const d=await api(`/face/recognize-batch?subject_id=${s.id}&section_id=${s.section_id}`,{method:"POST",body:fd});setResult(d);setMsg(`Done. ${d.recognized?.length||0} students recognized.`)}catch(e){setMsg(e.message)}finally{setLoading(false)}}
-  return <PageSection title="Face Attendance" subtitle="Upload up to 5 classroom photos. The backend uses the CNN face-recognition flow.">
+
+  async function run(){
+    if(!selected||!files.length)return;
+    const s=subs.find(x=>String(x.id)===String(selected)); if(!s)return;
+    const fd=new FormData(); files.forEach(f=>fd.append("files",f));
+    setLoading(true); setMsg(""); setResult(null);
+    try{
+      const d=await api(`/face/recognize-batch?subject_id=${s.id}&section_id=${s.section_id}`,{method:"POST",body:fd});
+      setResult(d); setMsg(`Done. ${d.recognized?.length||0} students recognized by Luxand.`);
+    }catch(e){setMsg(e.message)}finally{setLoading(false)}
+  }
+
+  return <PageSection title="Face Attendance" subtitle="Use the live camera to capture classroom photos. Luxand.cloud identifies registered students.">
     {msg&&<Alert text={msg}/>}
-    <Card title="1. Select Class">
-      <select value={selected} onChange={e=>setSelected(e.target.value)}><option value="">Select subject + section</option>{subs.map(s=><option value={s.id} key={`${s.id}-${s.section_id}`}>{s.name} — {s.section}</option>)}</select>
+    <Card title="1. Select Subject + Section">
+      <select value={selected} onChange={e=>{setSelected(e.target.value);setFiles([]);setResult(null);setMsg("")}}>
+        <option value="">Select subject + section</option>
+        {subs.map(s=><option value={s.id} key={`${s.id}-${s.section_id}`}>{s.name} — {s.section} (Sem {s.semester})</option>)}
+      </select>
     </Card>
-    <Card title="2. Capture / Choose Photos">
-      <input type="file" accept="image/*" capture="environment" multiple onChange={e=>setFiles(e.target.files||[])} />
+    <Card title="2. Live Camera">
+      <CameraCapture facingMode="environment" maxPhotos={5} capturedCount={files.length}
+        onCapture={file=>{if(files.length<5)setFiles(prev=>[...prev,file])}}
+        disabled={!selected||loading}/>
+      {files.length>0&&<div style={{marginTop:12}}>
+        <p className="hint">Captured classroom photos:</p>
+        <div className="toolbar">{files.map((file,index)=>
+          <button type="button" className="link-btn" key={`${file.name}-${index}`}
+            onClick={()=>setFiles(current=>current.filter((_,i)=>i!==index))} disabled={loading}>
+            Photo {index+1} ×
+          </button>)}
+        </div>
+      </div>}
       <p className="hint">Maximum 5 photos, 5 MB each, 35 MB total.</p>
-      {files.length>0&&<p>{files.length} photo(s) selected.</p>}
-      <button className="primary" disabled={!selected||!files.length||loading} onClick={run}>{loading?"Recognizing...":"Start Face Attendance"}</button>
+      <button className="primary" disabled={!selected||!files.length||loading} onClick={run}>
+        {loading?"Recognizing with Luxand...":"Start Face Attendance"}
+      </button>
     </Card>
     {result&&<Card title="Recognition Result">
-      <div className="stats-row"><Stat value={result.recognized?.length||0} label="Recognized"/><Stat value={result.total_faces_detected||0} label="Faces detected"/><Stat value={result.photos||0} label="Photos"/></div>
-      <DataTable headers={["Student","Enrollment","Distance","Attendance"]} rows={(result.recognized||[]).map(x=>[x.name,x.enrollment_no,x.distance ?? "-",x.attendance || "marked"])}/>
+      <div className="stats-row">
+        <Stat value={result.recognized?.length||0} label="Recognized"/>
+        <Stat value={result.total_faces_detected||0} label="Faces detected"/>
+        <Stat value={result.photos||0} label="Photos"/>
+      </div>
+      <DataTable headers={["Student","Enrollment","Confidence","Attendance"]}
+        rows={(result.recognized||[]).map(x=>[
+          x.name,x.enrollment_no,
+          x.confidence!=null?`${(Number(x.confidence)*100).toFixed(1)}%`:"-",
+          x.attendance||"marked"
+        ])}/>
     </Card>}
   </PageSection>;
 }
@@ -434,10 +558,38 @@ function StudentAttendance() {
   return <PageSection title="My Attendance" subtitle="Present classes and percentage for each subject.">{msg&&<Alert text={msg}/>}<Card title="Subject-wise Attendance"><DataTable headers={["Subject","Code","Present","Total","Percentage"]} rows={data.map(x=>[x.subject,x.code,x.present,x.total,<strong>{x.percentage}%</strong>])}/></Card></PageSection>;
 }
 function StudentFace() {
-  const [file,setFile]=useState(null),[msg,setMsg]=useState(""); const [me,setMe]=useState(getUser());
-  async function register(){if(!file)return;const fd=new FormData();fd.append("file",file);try{const d=await api("/student/me/face",{method:"POST",body:fd});setMsg(d.message||"Face registered successfully.");setFile(null)}catch(e){setMsg(e.message)}}
-  return <PageSection title="Face Registration" subtitle="Use a clear front-facing photo. You can update it anytime.">{msg&&<Alert text={msg}/>}<Card title="Register / Update Face"><input type="file" accept="image/*" capture="user" onChange={e=>setFile(e.target.files?.[0]||null)}/><p className="hint">Exactly one clear face is required. Maximum 5 MB.</p>{file&&<p>{file.name}</p>}<button className="primary" disabled={!file} onClick={register}>Register Face</button></Card></PageSection>;
+  const [file,setFile]=useState(null),[msg,setMsg]=useState(""),[loading,setLoading]=useState(false);
+  const me=getUser();
+
+  async function register(){
+    if(!file)return;
+    const fd=new FormData(); fd.append("file",file);
+    setLoading(true); setMsg("");
+    try{
+      const d=await api("/student/me/face",{method:"POST",body:fd});
+      setMsg(d.verification_used
+        ?"Face verified and updated successfully with Luxand."
+        :"Face registered successfully with Luxand.");
+      setFile(null);
+    }catch(e){setMsg(e.message)}finally{setLoading(false)}
+  }
+
+  return <PageSection title="Face Registration" subtitle="Use the live front camera. Re-registration is verified against your existing Luxand face.">
+    {msg&&<Alert text={msg}/>}
+    <Card title="Register / Update Face">
+      <CameraCapture facingMode="user" maxPhotos={1} capturedCount={file?1:0}
+        onCapture={captured=>{setFile(captured);setMsg("")}} disabled={loading}/>
+      {file&&<div style={{marginTop:12}}>
+        <p className="hint">Face capture ready for {me?.name||"student"}.</p>
+        <button className="primary" disabled={loading} onClick={register}>
+          {loading?"Registering with Luxand...":"Register / Update Face"}
+        </button>
+      </div>}
+      <p className="hint">Keep your full face visible, look directly at the camera and use good lighting. Maximum 5 MB.</p>
+    </Card>
+  </PageSection>;
 }
+
 function StudentAssignments() {
   const [list,setList]=useState([]),[msg,setMsg]=useState(""); useEffect(()=>{api("/assignments/student").then(setList).catch(e=>setMsg(e.message))},[]);
   return <PageSection title="My Assignments" subtitle="Pending, overdue and submitted assignments.">{msg&&<Alert text={msg}/>}<Card title={`Assignments (${list.length})`}><DataTable headers={["Subject","Title","Due","Status"]} rows={list.map(x=>[x.subject,x.title,new Date(x.due_date).toLocaleString(),<span className={`pill ${String(x.status).toLowerCase()}`}>{x.status}</span>])}/></Card></PageSection>;
