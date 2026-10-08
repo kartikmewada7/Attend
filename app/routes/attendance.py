@@ -1524,9 +1524,7 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             skipped += 1
             continue
 
-        # Prevent duplicate daily summary emails.
-        # Use PostgreSQL ON CONFLICT DO NOTHING so a retry/concurrent cron
-        # execution can never crash the whole endpoint with UniqueViolation.
+        # Check if a summary was already sent for this date.
         existing = db.scalar(
             select(AttendanceEmailLog).where(
                 AttendanceEmailLog.student_id == student.id,
@@ -1554,55 +1552,66 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             overall_present += present
             overall_conducted += conducted
 
-        if existing:
-            log = existing
-            log.email_address = student.email
-            log.status = "PENDING"
-            log.error_message = None
-        else:
-            stmt = (
-                pg_insert(AttendanceEmailLog)
-                .values(
-                    student_id=student.id,
-                    attendance_id=None,
-                    email_type="DAILY_SUMMARY",
-                    reference_date=summary_date,
-                    email_address=student.email,
-                    status="PENDING",
+        # Upsert the email log row — use ON CONFLICT DO UPDATE to always
+        # succeed, even on repeated/concurrent cron executions.
+        try:
+            if existing:
+                log = existing
+                log.email_address = student.email
+                log.status = "PENDING"
+                log.error_message = None
+                db.flush()
+            else:
+                stmt = (
+                    pg_insert(AttendanceEmailLog)
+                    .values(
+                        student_id=student.id,
+                        attendance_id=None,
+                        email_type="DAILY_SUMMARY",
+                        reference_date=summary_date,
+                        email_address=student.email,
+                        status="PENDING",
+                    )
+                    .on_conflict_do_update(
+                        index_elements=[
+                            "student_id",
+                            "email_type",
+                            "reference_date",
+                        ],
+                        set_={
+                            "email_address": student.email,
+                            "status": "PENDING",
+                            "error_message": None,
+                        },
+                    )
+                    .returning(AttendanceEmailLog.id)
                 )
-                .on_conflict_do_nothing(
-                    index_elements=[
-                        "student_id",
-                        "email_type",
-                        "reference_date",
-                    ]
+                result = db.execute(stmt)
+                db.flush()
+
+                log_id = result.scalar_one_or_none()
+                if log_id is None:
+                    failed += 1
+                    continue
+
+                log = db.scalar(
+                    select(AttendanceEmailLog).where(
+                        AttendanceEmailLog.id == log_id,
+                    )
                 )
-            )
-            db.execute(stmt)
-            db.flush()
+                if log is None:
+                    failed += 1
+                    continue
 
-            # The row may have been inserted by this request or already
-            # existed from another/repeated cron execution.
-            log = db.scalar(
-                select(AttendanceEmailLog).where(
-                    AttendanceEmailLog.student_id == student.id,
-                    AttendanceEmailLog.email_type == "DAILY_SUMMARY",
-                    AttendanceEmailLog.reference_date == summary_date,
-                )
-            )
-            if log is None:
-                failed += 1
-                continue
+                if log.status == "SENT":
+                    skipped += 1
+                    continue
 
-            if log.status == "SENT":
-                skipped += 1
-                continue
-
-            log.email_address = student.email
-            log.status = "PENDING"
-            log.error_message = None
-
-        db.flush()
+        except Exception as upsert_exc:
+            # Rollback the failed flush and skip this student.
+            db.rollback()
+            failed += 1
+            continue
 
         try:
             _send_daily_summary_email(
@@ -1622,7 +1631,12 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             log.error_message = str(exc)
             failed += 1
 
-    db.commit()
+        # Commit after each student so one failure doesn't block others.
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
     return {"date": summary_date.isoformat(), "sent": sent, "skipped": skipped, "failed": failed}
 
 
