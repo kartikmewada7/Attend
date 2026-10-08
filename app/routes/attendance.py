@@ -263,43 +263,32 @@ def send_attendance_confirmation(
 
         return
 
+    # Reuse an existing log for this attendance record. This prevents a
+    # duplicate-key error if a previous attempt created a PENDING/FAILED log.
     existing_log = db.scalar(
-
-        select(AttendanceEmailLog)
-
-        .where(
-
+        select(AttendanceEmailLog).where(
             AttendanceEmailLog.attendance_id == attendance.id,
-
             AttendanceEmailLog.email_type == "ATTENDANCE",
-
-            AttendanceEmailLog.status == "SENT",
-
         )
-
     )
 
     if existing_log:
-
-        return
-
-    log = AttendanceEmailLog(
-
-        student_id=student.id,
-
-        attendance_id=attendance.id,
-
-        email_type="ATTENDANCE",
-
-        reference_date=attendance.marked_at.date(),
-
-        email_address=student.email,
-
-        status="PENDING",
-
-    )
-
-    db.add(log)
+        if existing_log.status == "SENT":
+            return
+        log = existing_log
+        log.email_address = student.email
+        log.status = "PENDING"
+        log.error_message = None
+    else:
+        log = AttendanceEmailLog(
+            student_id=student.id,
+            attendance_id=attendance.id,
+            email_type="ATTENDANCE",
+            reference_date=attendance.marked_at.date(),
+            email_address=student.email,
+            status="PENDING",
+        )
+        db.add(log)
 
     db.flush()
 
@@ -1535,15 +1524,16 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             continue
 
         # Prevent duplicate daily summary emails.
+        # Reuse an existing PENDING/FAILED record on retries. The database
+        # has a unique constraint for student + email_type + reference_date.
         existing = db.scalar(
             select(AttendanceEmailLog).where(
                 AttendanceEmailLog.student_id == student.id,
                 AttendanceEmailLog.email_type == "DAILY_SUMMARY",
                 AttendanceEmailLog.reference_date == summary_date,
-                AttendanceEmailLog.status == "SENT",
             )
         )
-        if existing:
+        if existing and existing.status == "SENT":
             skipped += 1
             continue
 
@@ -1562,15 +1552,22 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             overall_present += present
             overall_conducted += conducted
 
-        log = AttendanceEmailLog(
-            student_id=student.id,
-            attendance_id=None,
-            email_type="DAILY_SUMMARY",
-            reference_date=summary_date,
-            email_address=student.email,
-            status="PENDING",
-        )
-        db.add(log)
+        if existing:
+            log = existing
+            log.email_address = student.email
+            log.status = "PENDING"
+            log.error_message = None
+        else:
+            log = AttendanceEmailLog(
+                student_id=student.id,
+                attendance_id=None,
+                email_type="DAILY_SUMMARY",
+                reference_date=summary_date,
+                email_address=student.email,
+                status="PENDING",
+            )
+            db.add(log)
+
         db.flush()
 
         try:
