@@ -1,7 +1,11 @@
 import logging
-from datetime import datetime
+from datetime import date, datetime, timezone
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
+
+IST = ZoneInfo("Asia/Kolkata")
 
 from app.core.config import settings
 
@@ -132,10 +136,22 @@ def send_attendance_email(
     to_email: str,
     student_name: str,
     subject_name: str,
-    attendance_date: str,
-    attendance_time: str,
+    attendance_date: Any,
+    attendance_time: Any,
     status: str,
 ) -> None:
+    if isinstance(attendance_time, datetime):
+        if attendance_time.tzinfo is None:
+            attendance_time = attendance_time.replace(tzinfo=timezone.utc)
+        attendance_time = attendance_time.astimezone(IST).strftime("%I:%M %p")
+
+    if isinstance(attendance_date, datetime):
+        if attendance_date.tzinfo is None:
+            attendance_date = attendance_date.replace(tzinfo=timezone.utc)
+        attendance_date = attendance_date.astimezone(IST).strftime("%d-%m-%Y")
+    elif isinstance(attendance_date, date):
+        attendance_date = attendance_date.strftime("%d-%m-%Y")
+
     status_text = status.upper()
 
     subject = (

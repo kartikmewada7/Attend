@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import json
 import os
 from urllib.request import Request, urlopen
@@ -273,6 +273,12 @@ def send_attendance_confirmation(
         )
     )
 
+    ist = ZoneInfo("Asia/Kolkata")
+    marked = attendance.marked_at
+    if marked.tzinfo is None:
+        marked = marked.replace(tzinfo=timezone.utc)
+    local_marked = marked.astimezone(ist)
+
     if existing_log:
         if existing_log.status == "SENT":
             return
@@ -285,7 +291,7 @@ def send_attendance_confirmation(
             student_id=student.id,
             attendance_id=attendance.id,
             email_type="ATTENDANCE",
-            reference_date=attendance.marked_at.date(),
+            reference_date=local_marked.date(),
             email_address=student.email,
             status="PENDING",
         )
@@ -303,13 +309,13 @@ def send_attendance_confirmation(
 
             subject_name=subject.name,
 
-            attendance_date=attendance.marked_at.strftime(
+            attendance_date=local_marked.strftime(
 
                 "%d-%m-%Y"
 
             ),
 
-            attendance_time=attendance.marked_at.strftime(
+            attendance_time=local_marked.strftime(
 
                 "%I:%M %p"
 
@@ -321,7 +327,7 @@ def send_attendance_confirmation(
 
         log.status = "SENT"
 
-        log.sent_at = datetime.utcnow()
+        log.sent_at = datetime.now(timezone.utc)
 
         log.error_message = None
 
@@ -947,7 +953,7 @@ def mark(
 
         row.source = "MANUAL"
 
-        row.marked_at = datetime.utcnow()
+        row.marked_at = datetime.now(timezone.utc)
 
         attendance_record = row
 
@@ -1163,7 +1169,7 @@ def bulk_mark(
 
             row.source = "MANUAL"
 
-            row.marked_at = datetime.utcnow()
+            row.marked_at = datetime.now(timezone.utc)
 
             attendance_record = row
 
