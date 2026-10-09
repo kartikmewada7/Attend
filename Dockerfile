@@ -46,14 +46,12 @@ COPY scripts ./scripts
 # STAGE 1 se frontend ke build files utha kar backend ke 'static' folder mein daalein
 COPY --from=frontend-builder /app/frontend/dist ./app/static
 
-# Download face models if not present
+# Copy models directory if present locally, otherwise download from Hugging Face CDN
+COPY models ./models
 RUN mkdir -p models/face && \
-    curl -fsSL -o models/face/blaze_face_short_range.tflite \
-    https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite && \
-    curl -fsSL -o models/face/face_detection_yunet_2023mar.onnx \
-    https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx && \
-    curl -fsSL -o models/face/face_recognition_sface_2021dec.onnx \
-    https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+    ([ -f models/face/blaze_face_short_range.tflite ] || curl -fsSL -o models/face/blaze_face_short_range.tflite https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite) && \
+    ([ -f models/face/face_detection_yunet_2023mar.onnx ] || curl -fsSL -o models/face/face_detection_yunet_2023mar.onnx https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx) && \
+    ([ -f models/face/face_recognition_sface_2021dec.onnx ] || curl -fsSL -o models/face/face_recognition_sface_2021dec.onnx https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx)
 
 EXPOSE 8080
 
