@@ -1,14 +1,10 @@
 import logging
 from datetime import datetime, timezone
-from typing import Any
 from zoneinfo import ZoneInfo
-
-IST = ZoneInfo("Asia/Kolkata")
-
+from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
 from app.core.config import settings
 from app.database import get_db
 from app.deps import require_role
@@ -33,20 +29,14 @@ from app.services.face_recognition import (
 )
 from app.services.luxand import recognize_all
 from app.services.storage import upload_bytes
-
 logger = logging.getLogger("uvicorn")
 router = APIRouter(prefix="/api/face", tags=["Face Recognition Attendance"])
-
 MAX_FACES_PER_PHOTO = 50
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 MAX_SESSION_PHOTOS = 5
 MAX_SESSION_BYTES = 35 * 1024 * 1024
-
-
 def utcnow():
     return datetime.now(timezone.utc)
-
-
 def authorized_teacher_section(
     db: Session,
     teacher_id: int,
@@ -65,11 +55,9 @@ def authorized_teacher_section(
             403,
             "Subject and section are not assigned to this teacher",
         )
-
     section = db.get(Section, section_id)
     if not section:
         raise HTTPException(404, "Section not found")
-
     subject_in_semester = db.scalar(
         select(SemesterSubject.id).where(
             SemesterSubject.subject_id == subject_id,
@@ -81,10 +69,7 @@ def authorized_teacher_section(
             400,
             "Selected subject does not belong to this semester",
         )
-
     return mapping
-
-
 def create_session(
     db: Session,
     teacher_id: int,
@@ -101,8 +86,6 @@ def create_session(
     db.add(session)
     db.flush()
     return session
-
-
 def load_registered_faces(db: Session, section_id: int):
     rows = db.execute(
         select(Student, StudentFaceEmbedding)
@@ -117,11 +100,9 @@ def load_registered_faces(db: Session, section_id: int):
         )
         .order_by(Student.roll_no)
     ).all()
-
     students_by_luxand_id: dict[str, Student] = {}
     known_embeddings: list[tuple[int, Any]] = []
     students_by_id: dict[int, Student] = {}
-
     for student, face in rows:
         students_by_id[student.id] = student
         if face.luxand_person_id:
@@ -131,28 +112,19 @@ def load_registered_faces(db: Session, section_id: int):
                 known_embeddings.append((student.id, embedding_from_db(face.embedding)))
             except Exception:
                 pass
-
     return students_by_luxand_id, known_embeddings, students_by_id
-
-
 async def read_image_upload(upload: UploadFile) -> bytes:
     if not upload.content_type or not upload.content_type.startswith("image/"):
         raise HTTPException(400, "Only image files are allowed")
-
     data = await upload.read()
-
     if not data:
         raise HTTPException(400, "Empty image file")
-
     if len(data) > MAX_PHOTO_BYTES:
         raise HTTPException(
             400,
             "Each attendance image must be 5 MB or less",
         )
-
     return data
-
-
 async def recognize_photo(
     data: bytes,
     filename: str,
@@ -162,7 +134,6 @@ async def recognize_photo(
 ):
     results = []
     luxand_matched_ids = set()
-
     # 1. Attempt Luxand Cloud recognition if configured
     if settings.LUXAND_API_TOKEN.strip() and students_by_luxand_id:
         try:
@@ -190,7 +161,6 @@ async def recognize_photo(
                 results.append(res)
         except Exception as exc:
             logger.warning("Luxand recognition note: %s. Using local engine fallback.", exc)
-
     # 2. Local AttendAI YuNet + SFace engine fallback / augmentation
     if known_embeddings:
         try:
@@ -217,10 +187,7 @@ async def recognize_photo(
                         luxand_matched_ids.add(sid)
         except Exception as loc_exc:
             logger.warning("Local face recognition note: %s", loc_exc)
-
     return results
-
-
 def add_attendance_rows(
     db: Session,
     session_id: int,
@@ -228,17 +195,13 @@ def add_attendance_rows(
     already_marked: set[int],
 ):
     created: list[Attendance] = []
-
     for item in recognized_results:
         if not item.get("recognized"):
             continue
-
         student_id = int(item["student_id"])
-
         if student_id in already_marked:
             item["attendance"] = "already_marked"
             continue
-
         provider = str(item.get("provider", ""))
         attendance = Attendance(
             session_id=session_id,
@@ -252,10 +215,7 @@ def add_attendance_rows(
         already_marked.add(student_id)
         item["attendance"] = "marked"
         created.append(attendance)
-
     return created
-
-
 async def process_attendance(
     *,
     subject_id: int,
@@ -270,51 +230,41 @@ async def process_attendance(
         subject_id,
         section_id,
     )
-
     if not files:
         raise HTTPException(400, "At least one camera photo is required")
-
     if len(files) > MAX_SESSION_PHOTOS:
         raise HTTPException(
             400,
             "Maximum 5 photos per attendance session",
         )
-
     students_by_luxand_id, known_embeddings, students_by_id = load_registered_faces(db, section_id)
-
     if not students_by_id:
         raise HTTPException(
             400,
             "No students in this section have registered their face yet",
         )
-
     subject = db.get(Subject, subject_id)
     if not subject:
         raise HTTPException(404, "Subject not found")
-
     session = create_session(
         db,
         user["id"],
         subject_id,
         section_id,
     )
-
     already_marked: set[int] = set()
     total_bytes = 0
     combined: list[dict] = []
     total_faces = 0
-
     try:
         for index, upload in enumerate(files, start=1):
             data = await read_image_upload(upload)
             total_bytes += len(data)
-
             if total_bytes > MAX_SESSION_BYTES:
                 raise HTTPException(
                     400,
                     "Total attendance photos must be 35 MB or less",
                 )
-
             results = await recognize_photo(
                 data,
                 upload.filename or f"attendance-{index}.jpg",
@@ -322,17 +272,14 @@ async def process_attendance(
                 known_embeddings,
                 students_by_id,
             )
-
             total_faces += len(results)
             combined.extend(results)
-
             storage_path = upload_bytes(
                 settings.SUPABASE_ATTENDANCE_BUCKET,
                 f"session-{session.id}/photo-{index}-{upload.filename or 'attendance.jpg'}",
                 data,
                 upload.content_type or "image/jpeg",
             )
-
             db.add(
                 AttendanceSessionPhoto(
                     session_id=session.id,
@@ -343,20 +290,25 @@ async def process_attendance(
                     captured_at=utcnow(),
                 )
             )
-
         attendance_rows = add_attendance_rows(
             db,
             session.id,
             combined,
             already_marked,
         )
-
         # IDs are required by the attendance email log.
         db.flush()
-
         for attendance in attendance_rows:
             student = db.get(Student, attendance.student_id)
             if student:
+                # Convert the timestamp to India Standard Time for the email.
+                if attendance.marked_at:
+                    marked_at = attendance.marked_at
+                    if marked_at.tzinfo is None:
+                        marked_at = marked_at.replace(tzinfo=timezone.utc)
+                    attendance.marked_at = marked_at.astimezone(
+                        ZoneInfo("Asia/Kolkata")
+                    )
                 send_attendance_confirmation(
                     db,
                     attendance,
@@ -367,37 +319,29 @@ async def process_attendance(
         session.status = "CLOSED"
         session.ended_at = utcnow()
         db.commit()
-
     except HTTPException:
         db.rollback()
         raise
     except Exception:
         db.rollback()
         raise
-
     # One result per recognized student, keeping the highest confidence.
     unique: dict[int, dict] = {}
-
     for item in combined:
         if not item.get("recognized"):
             continue
-
         student_id = int(item["student_id"])
         current = unique.get(student_id)
-
         if current is None:
             unique[student_id] = item
             continue
-
         current_conf = current.get("confidence")
         new_conf = item.get("confidence")
-
         if (
             new_conf is not None
             and (current_conf is None or new_conf > current_conf)
         ):
             unique[student_id] = item
-
     return {
         "session_id": session.id,
         "subject_id": subject_id,
@@ -409,8 +353,6 @@ async def process_attendance(
         "provider": "Luxand.cloud + AttendAI Engine",
         "message": f"Successfully recognized {len(unique)} students and marked present.",
     }
-
-
 @router.post("/recognize")
 async def recognize_and_mark(
     subject_id: int,
@@ -426,8 +368,6 @@ async def recognize_and_mark(
         user=user,
         db=db,
     )
-
-
 @router.post("/recognize-batch")
 async def recognize_batch(
     subject_id: int,
