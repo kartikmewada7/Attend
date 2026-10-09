@@ -339,7 +339,7 @@ function ManualAttendance() {
   </PageSection>;
 }
 
- function CameraCapture({
+function CameraCapture({
   facingMode = "environment",
   maxPhotos = 1,
   onCapture,
@@ -354,6 +354,38 @@ function ManualAttendance() {
   const [cameraStatus, setCameraStatus] = useState("Camera closed");
   const [starting, setStarting] = useState(false);
 
+  async function getMediaStream() {
+    // 1. Try high-definition with desired facingMode
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+    } catch (e1) {
+      console.warn("High-res getUserMedia failed, trying facingMode:", e1);
+    }
+
+    // 2. Try simple facingMode
+    try {
+      return await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: facingMode } },
+      });
+    } catch (e2) {
+      console.warn("FacingMode getUserMedia failed, trying basic video:", e2);
+    }
+
+    // 3. Fallback to any available video camera
+    return await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: true,
+    });
+  }
+
   async function startCamera() {
     if (starting) return;
 
@@ -364,138 +396,69 @@ function ManualAttendance() {
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(
-          "Browser camera API available nahi hai. HTTPS par app open karo."
+          "Camera API not available in this browser. Please open over HTTPS."
         );
       }
 
-      // Stop old stream if any.
+      // Stop previous stream
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: {
-            ideal: facingMode,
-          },
-          width: {
-            ideal: 1280,
-          },
-          height: {
-            ideal: 720,
-          },
-        },
-      });
-
+      const stream = await getMediaStream();
       const tracks = stream.getVideoTracks();
 
       if (!tracks.length) {
-        throw new Error("Camera ne koi video track return nahi kiya.");
+        throw new Error("No video track received from camera.");
       }
 
       const track = tracks[0];
-
-      console.log("Camera track:", {
-        label: track.label,
-        enabled: track.enabled,
-        readyState: track.readyState,
-        settings: track.getSettings(),
-      });
-
-      if (track.readyState !== "live") {
-        throw new Error(
-          "Camera track live nahi hai. Camera kisi doosre application mein use ho sakta hai."
-        );
-      }
-
       track.enabled = true;
-
       streamRef.current = stream;
 
-      // IMPORTANT:
-      // video element hamesha DOM mein mounted hai.
       const video = videoRef.current;
-
       if (!video) {
-        throw new Error("Video element available nahi hai.");
+        throw new Error("Video element is not available in DOM.");
       }
 
       video.srcObject = stream;
       video.muted = true;
-      video.autoplay = true;
+      video.defaultMuted = true;
       video.playsInline = true;
+      video.setAttribute("playsinline", "true");
+      video.setAttribute("webkit-playsinline", "true");
+      video.setAttribute("muted", "true");
 
       setCameraOpen(true);
-      setCameraStatus("Camera connected. Starting preview...");
+      setCameraStatus("Camera active");
 
-      try {
-        await video.play();
-      } catch (playError) {
-        console.warn("Initial video.play() failed:", playError);
+      const playVideo = async () => {
+        try {
+          await video.play();
+          setCameraStatus("Camera is live");
+        } catch (playErr) {
+          console.warn("Autoplay was prevented or delayed:", playErr);
+          setCameraStatus("Camera ready. Click Capture to take photo.");
+        }
+      };
+
+      if (video.readyState >= 2) {
+        playVideo();
+      } else {
+        video.onloadedmetadata = () => playVideo();
+        video.oncanplay = () => playVideo();
       }
 
-      // Wait a little for the actual video frame.
-      setTimeout(async () => {
-        try {
-          if (video.srcObject !== stream) {
-            video.srcObject = stream;
-          }
-
-          if (video.paused) {
-            await video.play();
-          }
-
-          console.log("Video state:", {
-            readyState: video.readyState,
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-            paused: video.paused,
-            ended: video.ended,
-          });
-
-          if (video.videoWidth > 0 && video.videoHeight > 0) {
-            setCameraStatus("Camera is live");
-          } else {
-            setCameraStatus(
-              "Camera connected, but video frame is not available."
-            );
-          }
-        } catch (error) {
-          console.error("Video start error:", error);
-          setCameraError(
-            "Camera connected hai, lekin video preview start nahi hua."
-          );
-        }
-      }, 500);
-
       track.onended = () => {
-        console.warn("Camera track ended.");
         setCameraOpen(false);
-        setCameraStatus("Camera stopped.");
-        setCameraError(
-          "Camera stream stop ho gaya. Camera ko dobara open karo."
-        );
-      };
-
-      track.onmute = () => {
-        console.warn("Camera track muted.");
-        setCameraStatus("Camera temporarily muted.");
-      };
-
-      track.onunmute = () => {
-        console.log("Camera track unmuted.");
-        setCameraStatus("Camera is live");
+        setCameraStatus("Camera stopped");
       };
     } catch (error) {
-      console.error("Camera start error:", error);
+      console.error("Camera error:", error);
 
       if (streamRef.current) {
-        streamRef.current
-          .getTracks()
-          .forEach((track) => track.stop());
-
+        streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
 
@@ -503,27 +466,19 @@ function ManualAttendance() {
 
       if (error?.name === "NotAllowedError") {
         setCameraError(
-          "Camera permission blocked hai. Browser settings mein Camera → Allow karo."
+          "Camera permission blocked. Please allow camera in browser address bar settings."
         );
       } else if (error?.name === "NotFoundError") {
-        setCameraError(
-          "Camera device nahi mila."
-        );
+        setCameraError("No camera device found on this system.");
       } else if (error?.name === "NotReadableError") {
         setCameraError(
-          "Camera kisi doosre application/tab mein use ho raha hai. Camera ko doosri app se close karo."
-        );
-      } else if (error?.name === "OverconstrainedError") {
-        setCameraError(
-          "Camera configuration supported nahi hai. Dobara try karo."
+          "Camera is being used by another application. Please close other camera apps and retry."
         );
       } else {
         setCameraError(
-          error?.message ||
-            "Camera start nahi ho paaya."
+          error?.message || "Failed to start camera."
         );
       }
-
       setCameraStatus("Camera failed");
     } finally {
       setStarting(false);
@@ -532,15 +487,11 @@ function ManualAttendance() {
 
   function stopCamera() {
     if (streamRef.current) {
-      streamRef.current
-        .getTracks()
-        .forEach((track) => track.stop());
-
+      streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
 
     const video = videoRef.current;
-
     if (video) {
       video.pause();
       video.srcObject = null;
@@ -553,74 +504,57 @@ function ManualAttendance() {
 
   function capturePhoto() {
     const video = videoRef.current;
-
     if (!video) {
-      setCameraError("Video element available nahi hai.");
+      setCameraError("Video element is not available.");
       return;
     }
 
-    if (!video.videoWidth || !video.videoHeight) {
-      setCameraError(
-        "Live camera frame available nahi hai. Camera ko 2 seconds start hone do."
-      );
-      return;
-    }
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
 
-    if (capturedCount >= maxPhotos) {
-      return;
-    }
+    if (capturedCount >= maxPhotos) return;
 
     const canvas = document.createElement("canvas");
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = width;
+    canvas.height = height;
 
     const ctx = canvas.getContext("2d");
-
     if (!ctx) {
-      setCameraError("Photo capture nahi ho paaya.");
+      setCameraError("Could not create photo canvas.");
       return;
     }
 
-    ctx.drawImage(
-      video,
-      0,
-      0,
-      canvas.width,
-      canvas.height
-    );
+    // Mirror horizontal if user-facing camera
+    if (facingMode === "user") {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     canvas.toBlob(
       (blob) => {
         if (!blob) {
-          setCameraError("Photo create nahi ho paaya.");
+          setCameraError("Failed to encode photo.");
           return;
         }
 
         const file = new File(
           [blob],
-          `camera-${Date.now()}.jpg`,
-          {
-            type: "image/jpeg",
-          }
+          `face-${Date.now()}.jpg`,
+          { type: "image/jpeg" }
         );
-
         onCapture(file);
       },
       "image/jpeg",
-      0.9
+      0.92
     );
   }
 
-  // IMPORTANT:
-  // Camera component ke lifecycle ke saath cleanup.
   useEffect(() => {
     return () => {
       if (streamRef.current) {
-        streamRef.current
-          .getTracks()
-          .forEach((track) => track.stop());
-
+        streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
     };
@@ -628,17 +562,19 @@ function ManualAttendance() {
 
   return (
     <div className="camera-box">
-
-      {/* VIDEO ALWAYS EXISTS IN DOM */}
       <div
         style={{
           width: "100%",
-          maxWidth: "900px",
+          maxWidth: "800px",
           margin: "0 auto",
           background: "#0b1728",
           borderRadius: "14px",
           overflow: "hidden",
           position: "relative",
+          minHeight: "340px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
         <video
@@ -649,36 +585,37 @@ function ManualAttendance() {
           style={{
             width: "100%",
             height: "auto",
-            minHeight: "360px",
-            display: "block",
-            objectFit: "cover",
-            background: "#0b1728",
+            maxHeight: "480px",
+            display: cameraOpen ? "block" : "none",
+            objectFit: "contain",
+            transform: facingMode === "user" ? "scaleX(-1)" : "none",
           }}
         />
 
         {!cameraOpen && (
           <div
             style={{
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#fff",
-              fontSize: "18px",
-              pointerEvents: "none",
+              padding: "40px 20px",
+              textAlign: "center",
+              color: "#94a3b8",
             }}
           >
-            Camera is closed
+            <div style={{ fontSize: "40px", marginBottom: "8px" }}>📷</div>
+            <p style={{ margin: 0, fontSize: "16px", color: "#f8fafc" }}>
+              Live Camera Preview
+            </p>
+            <p style={{ margin: "4px 0 0", fontSize: "13px" }}>
+              Click "Open Live Camera" or "Upload Photo" below
+            </p>
           </div>
         )}
       </div>
 
       <div
         style={{
-          marginTop: "12px",
+          marginTop: "14px",
           display: "flex",
-          gap: "12px",
+          gap: "10px",
           alignItems: "center",
           flexWrap: "wrap",
         }}
@@ -690,24 +627,18 @@ function ManualAttendance() {
             disabled={disabled || starting}
             onClick={startCamera}
           >
-            {starting
-              ? "Opening Camera..."
-              : "📷 Open Live Camera"}
+            {starting ? "Starting Camera..." : "📷 Open Live Camera"}
           </button>
         ) : (
           <>
             <button
               type="button"
               className="primary"
-              disabled={
-                disabled ||
-                capturedCount >= maxPhotos
-              }
+              disabled={disabled || capturedCount >= maxPhotos}
               onClick={capturePhoto}
             >
               📸 Capture Photo
             </button>
-
             <button
               type="button"
               className="link-btn"
@@ -717,19 +648,41 @@ function ManualAttendance() {
             </button>
           </>
         )}
+
+        <label
+          className="link-btn"
+          style={{
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "4px",
+            border: "1px solid #cbd5e1",
+            padding: "8px 14px",
+            borderRadius: "6px",
+          }}
+        >
+          📁 {maxPhotos > 1 ? "Upload Photos" : "Choose Photo from Device"}
+          <input
+            type="file"
+            accept="image/*"
+            multiple={maxPhotos > 1}
+            capture={facingMode === "user" ? "user" : "environment"}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const files = Array.from(e.target.files || []);
+              files.slice(0, maxPhotos - capturedCount).forEach(onCapture);
+              e.target.value = "";
+            }}
+            disabled={disabled || capturedCount >= maxPhotos}
+          />
+        </label>
       </div>
 
-      <p className="hint">
-        {cameraStatus}
+      <p className="hint" style={{ marginTop: "8px" }}>
+        {cameraStatus} · Captured: {capturedCount} / {maxPhotos}
       </p>
 
-      <p className="hint">
-        Captured: {capturedCount} / {maxPhotos}
-      </p>
-
-      {cameraError && (
-        <Alert text={cameraError} />
-      )}
+      {cameraError && <Alert text={cameraError} />}
     </div>
   );
 }
@@ -746,11 +699,12 @@ function FaceAttendance() {
     setLoading(true); setMsg(""); setResult(null);
     try{
       const d=await api(`/face/recognize-batch?subject_id=${s.id}&section_id=${s.section_id}`,{method:"POST",body:fd});
-      setResult(d); setMsg(`Done. ${d.recognized?.length||0} students recognized by Luxand.`);
+      setResult(d);
+      setMsg(d.message || `Done. ${d.recognized?.length||0} students recognized and marked present.`);
     }catch(e){setMsg(e.message)}finally{setLoading(false)}
   }
 
-  return <PageSection title="Face Attendance" subtitle="Use the live camera to capture classroom photos. Luxand.cloud identifies registered students.">
+  return <PageSection title="Face Attendance" subtitle="Use live camera or upload classroom photos. Facial recognition identifies registered students.">
     {msg&&<Alert text={msg}/>}
     <Card title="1. Select Subject + Section">
       <select value={selected} onChange={e=>{setSelected(e.target.value);setFiles([]);setResult(null);setMsg("")}}>
@@ -758,22 +712,24 @@ function FaceAttendance() {
         {subs.map(s=><option value={s.id} key={`${s.id}-${s.section_id}`}>{s.name} — {s.section} (Sem {s.semester})</option>)}
       </select>
     </Card>
-    <Card title="2. Live Camera">
+    <Card title="2. Classroom Photos (Camera or Upload)">
       <CameraCapture facingMode="environment" maxPhotos={5} capturedCount={files.length}
         onCapture={file=>{if(files.length<5)setFiles(prev=>[...prev,file])}}
         disabled={!selected||loading}/>
       {files.length>0&&<div style={{marginTop:12}}>
-        <p className="hint">Captured classroom photos:</p>
-        <div className="toolbar">{files.map((file,index)=>
-          <button type="button" className="link-btn" key={`${file.name}-${index}`}
-            onClick={()=>setFiles(current=>current.filter((_,i)=>i!==index))} disabled={loading}>
-            Photo {index+1} ×
-          </button>)}
+        <p className="hint">Selected classroom photos ({files.length}/5):</p>
+        <div className="toolbar" style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+          {files.map((file,index)=>
+            <button type="button" className="link-btn" key={`${file.name}-${index}`}
+              onClick={()=>setFiles(current=>current.filter((_,i)=>i!==index))} disabled={loading}
+              style={{background:"#f1f5f9", padding:"6px 12px", borderRadius:6}}>
+              📷 Photo {index+1} ✕
+            </button>)}
         </div>
       </div>}
-      <p className="hint">Maximum 5 photos, 5 MB each, 35 MB total.</p>
+      <p className="hint">Maximum 5 photos, 5 MB each. Wide angles with good lighting recommended.</p>
       <button className="primary" disabled={!selected||!files.length||loading} onClick={run}>
-        {loading?"Recognizing with Luxand...":"Start Face Attendance"}
+        {loading?"Recognizing faces...":"Start Face Attendance"}
       </button>
     </Card>
     {result&&<Card title="Recognition Result">
@@ -872,36 +828,117 @@ function StudentAttendance() {
   return <PageSection title="My Attendance" subtitle="Present classes and percentage for each subject.">{msg&&<Alert text={msg}/>}<Card title="Subject-wise Attendance"><DataTable headers={["Subject","Code","Present","Total","Percentage"]} rows={data.map(x=>[x.subject,x.code,x.present,x.total,<strong>{x.percentage}%</strong>])}/></Card></PageSection>;
 }
 function StudentFace() {
-  const [file,setFile]=useState(null),[msg,setMsg]=useState(""),[loading,setLoading]=useState(false);
-  const me=getUser();
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const me = getUser();
 
-  async function register(){
-    if(!file)return;
-    const fd=new FormData(); fd.append("file",file);
-    setLoading(true); setMsg("");
-    try{
-      const d=await api("/student/me/face",{method:"POST",body:fd});
-      setMsg(d.verification_used
-        ?"Face verified and updated successfully with Luxand."
-        :"Face registered successfully with Luxand.");
-      setFile(null);
-    }catch(e){setMsg(e.message)}finally{setLoading(false)}
+  function onCaptured(captured) {
+    setFile(captured);
+    if (preview) URL.revokeObjectURL(preview);
+    setPreview(URL.createObjectURL(captured));
+    setMsg("");
   }
 
-  return <PageSection title="Face Registration" subtitle="Use the live front camera. Re-registration is verified against your existing Luxand face.">
-    {msg&&<Alert text={msg}/>}
-    <Card title="Register / Update Face">
-      <CameraCapture facingMode="user" maxPhotos={1} capturedCount={file?1:0}
-        onCapture={captured=>{setFile(captured);setMsg("")}} disabled={loading}/>
-      {file&&<div style={{marginTop:12}}>
-        <p className="hint">Face capture ready for {me?.name||"student"}.</p>
-        <button className="primary" disabled={loading} onClick={register}>
-          {loading?"Registering with Luxand...":"Register / Update Face"}
-        </button>
-      </div>}
-      <p className="hint">Keep your full face visible, look directly at the camera and use good lighting. Maximum 5 MB.</p>
-    </Card>
-  </PageSection>;
+  function clearPhoto() {
+    if (preview) URL.revokeObjectURL(preview);
+    setFile(null);
+    setPreview(null);
+  }
+
+  async function register() {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    setLoading(true);
+    setMsg("");
+    try {
+      const d = await api("/student/me/face", { method: "POST", body: fd });
+      setMsg(d.message || "Face registered successfully.");
+      clearPhoto();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <PageSection
+      title="Face Registration"
+      subtitle="Use the live camera or upload a clear photo. Face recognition connects with Luxand Cloud & AttendAI Engine."
+    >
+      {msg && <Alert text={msg} />}
+      <Card title="Register / Update Face">
+        <CameraCapture
+          facingMode="user"
+          maxPhotos={1}
+          capturedCount={file ? 1 : 0}
+          onCapture={onCaptured}
+          disabled={loading}
+        />
+
+        {preview && (
+          <div
+            style={{
+              marginTop: "16px",
+              padding: "16px",
+              background: "#f1f5f9",
+              borderRadius: "10px",
+              textAlign: "center",
+            }}
+          >
+            <p className="hint" style={{ fontWeight: 600, color: "#1e293b", marginBottom: "10px" }}>
+              Captured Face Preview for {me?.name || "Student"}:
+            </p>
+            <img
+              src={preview}
+              alt="Face preview"
+              style={{
+                width: "180px",
+                height: "180px",
+                objectFit: "cover",
+                borderRadius: "12px",
+                border: "3px solid #3b82f6",
+                display: "inline-block",
+                boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+              }}
+            />
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "center",
+                marginTop: "14px",
+              }}
+            >
+              <button
+                type="button"
+                className="primary"
+                disabled={loading}
+                onClick={register}
+              >
+                {loading ? "Registering Face..." : "✓ Submit & Register Face"}
+              </button>
+              <button
+                type="button"
+                className="link-btn"
+                disabled={loading}
+                onClick={clearPhoto}
+              >
+                ✕ Retake / Change Photo
+              </button>
+            </div>
+          </div>
+        )}
+
+        <p className="hint" style={{ marginTop: "12px" }}>
+          Keep your full face centered, look directly at the camera with good lighting. Supported formats: JPG, PNG (Max 5 MB).
+        </p>
+      </Card>
+    </PageSection>
+  );
 }
 
 function StudentAssignments() {

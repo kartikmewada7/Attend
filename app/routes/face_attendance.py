@@ -1,6 +1,6 @@
-from __future__ import annotations
-
+import logging
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
@@ -21,12 +21,20 @@ from app.models import (
     TeacherSubjectSection,
 )
 from app.routes.attendance import send_attendance_confirmation
+from app.services.face_recognition import (
+    best_match,
+    decode_image,
+    detect_face_locations,
+    embedding_from_db,
+    extract_encodings,
+)
 from app.services.luxand import recognize_all
 from app.services.storage import upload_bytes
 
+logger = logging.getLogger("uvicorn")
 router = APIRouter(prefix="/api/face", tags=["Face Recognition Attendance"])
 
-MAX_FACES_PER_PHOTO = 40
+MAX_FACES_PER_PHOTO = 50
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 MAX_SESSION_PHOTOS = 5
 MAX_SESSION_BYTES = 35 * 1024 * 1024
@@ -92,7 +100,7 @@ def create_session(
     return session
 
 
-def load_luxand_faces(db: Session, section_id: int):
+def load_registered_faces(db: Session, section_id: int):
     rows = db.execute(
         select(Student, StudentFaceEmbedding)
         .join(
@@ -103,16 +111,25 @@ def load_luxand_faces(db: Session, section_id: int):
             Student.current_section_id == section_id,
             Student.is_active.is_(True),
             StudentFaceEmbedding.is_active.is_(True),
-            StudentFaceEmbedding.luxand_person_id.is_not(None),
         )
         .order_by(Student.roll_no)
     ).all()
 
     students_by_luxand_id: dict[str, Student] = {}
-    for student, face in rows:
-        students_by_luxand_id[str(face.luxand_person_id)] = student
+    known_embeddings: list[tuple[int, Any]] = []
+    students_by_id: dict[int, Student] = {}
 
-    return students_by_luxand_id
+    for student, face in rows:
+        students_by_id[student.id] = student
+        if face.luxand_person_id:
+            students_by_luxand_id[str(face.luxand_person_id)] = student
+        if face.embedding:
+            try:
+                known_embeddings.append((student.id, embedding_from_db(face.embedding)))
+            except Exception:
+                pass
+
+    return students_by_luxand_id, known_embeddings, students_by_id
 
 
 async def read_image_upload(upload: UploadFile) -> bytes:
@@ -137,45 +154,66 @@ async def recognize_photo(
     data: bytes,
     filename: str,
     students_by_luxand_id: dict[str, Student],
+    known_embeddings: list[tuple[int, Any]],
+    students_by_id: dict[int, Student],
 ):
-    try:
-        luxand_faces = await recognize_all(data, filename)
-    except Exception as exc:
-        raise HTTPException(
-            502,
-            f"Luxand recognition service error: {exc}",
-        ) from exc
-
-    if len(luxand_faces) > MAX_FACES_PER_PHOTO:
-        raise HTTPException(
-            400,
-            f"Too many faces in one photo. Maximum supported is {MAX_FACES_PER_PHOTO}.",
-        )
-
     results = []
+    luxand_matched_ids = set()
 
-    for item in luxand_faces:
-        person_id = str(item["luxand_person_id"])
-        student = students_by_luxand_id.get(person_id)
-
-        result = {
-            "recognized": bool(student),
-            "luxand_person_id": person_id,
-            "name": item.get("name"),
-            "confidence": item.get("confidence"),
-        }
-
-        if student:
-            result.update(
-                {
-                    "student_id": student.id,
-                    "name": student.name,
-                    "enrollment_no": student.enrollment_no,
-                    "roll_no": student.roll_no,
+    # 1. Attempt Luxand Cloud recognition if configured
+    if settings.LUXAND_API_TOKEN.strip() and students_by_luxand_id:
+        try:
+            luxand_faces = await recognize_all(data, filename)
+            for item in luxand_faces:
+                person_id = str(item["luxand_person_id"])
+                student = students_by_luxand_id.get(person_id)
+                res = {
+                    "recognized": bool(student),
+                    "luxand_person_id": person_id,
+                    "name": item.get("name"),
+                    "confidence": item.get("confidence"),
+                    "provider": "Luxand.cloud",
                 }
-            )
+                if student:
+                    luxand_matched_ids.add(student.id)
+                    res.update(
+                        {
+                            "student_id": student.id,
+                            "name": student.name,
+                            "enrollment_no": student.enrollment_no,
+                            "roll_no": student.roll_no,
+                        }
+                    )
+                results.append(res)
+        except Exception as exc:
+            logger.warning("Luxand recognition note: %s. Using local engine fallback.", exc)
 
-        results.append(result)
+    # 2. Local AttendAI YuNet + SFace engine fallback / augmentation
+    if known_embeddings:
+        try:
+            image = decode_image(data)
+            locations = detect_face_locations(image)
+            encodings = extract_encodings(image, locations)
+            for enc in encodings:
+                sid, dist, matched = best_match(known_embeddings, enc)
+                if matched and sid not in luxand_matched_ids:
+                    student = students_by_id.get(sid)
+                    if student:
+                        conf = max(0.0, min(1.0, 1.0 - dist))
+                        results.append(
+                            {
+                                "recognized": True,
+                                "student_id": student.id,
+                                "name": student.name,
+                                "enrollment_no": student.enrollment_no,
+                                "roll_no": student.roll_no,
+                                "confidence": round(conf, 3),
+                                "provider": "AttendAI (YuNet+SFace)",
+                            }
+                        )
+                        luxand_matched_ids.add(sid)
+        except Exception as loc_exc:
+            logger.warning("Local face recognition note: %s", loc_exc)
 
     return results
 
@@ -198,11 +236,13 @@ def add_attendance_rows(
             item["attendance"] = "already_marked"
             continue
 
+        provider = str(item.get("provider", ""))
+        source = "FACE_LUXAND" if "Luxand" in provider else "FACE_AI"
         attendance = Attendance(
             session_id=session_id,
             student_id=student_id,
             status="PRESENT",
-            source="FACE_LUXAND",
+            source=source,
             recognition_confidence=item.get("confidence"),
             marked_at=utcnow(),
         )
@@ -238,12 +278,12 @@ async def process_attendance(
             "Maximum 5 photos per attendance session",
         )
 
-    students_by_luxand_id = load_luxand_faces(db, section_id)
+    students_by_luxand_id, known_embeddings, students_by_id = load_registered_faces(db, section_id)
 
-    if not students_by_luxand_id:
+    if not students_by_id:
         raise HTTPException(
             400,
-            "No students in this section have registered their face with Luxand yet",
+            "No students in this section have registered their face yet",
         )
 
     subject = db.get(Subject, subject_id)
@@ -277,6 +317,8 @@ async def process_attendance(
                 data,
                 upload.filename or f"attendance-{index}.jpg",
                 students_by_luxand_id,
+                known_embeddings,
+                students_by_id,
             )
 
             total_faces += len(results)
@@ -362,7 +404,8 @@ async def process_attendance(
         "total_faces_detected": total_faces,
         "recognized": list(unique.values()),
         "faces": combined,
-        "provider": "Luxand.cloud",
+        "provider": "Luxand.cloud + AttendAI Engine",
+        "message": f"Successfully recognized {len(unique)} students and marked present.",
     }
 
 
