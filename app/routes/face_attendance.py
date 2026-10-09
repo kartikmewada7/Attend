@@ -237,12 +237,11 @@ def add_attendance_rows(
             continue
 
         provider = str(item.get("provider", ""))
-        source = "FACE_LUXAND" if "Luxand" in provider else "FACE_AI"
         attendance = Attendance(
             session_id=session_id,
             student_id=student_id,
             status="PRESENT",
-            source=source,
+            source="FACE",
             recognition_confidence=item.get("confidence"),
             marked_at=utcnow(),
         )
