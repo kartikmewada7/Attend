@@ -11,8 +11,15 @@ const API = (() => {
     return base.endsWith("/api") ? base : `${base}/api`;
   }
 
-  const host = window.location.hostname || "127.0.0.1";
-  return `http://${host}:8000/api`;
+  // When running inside the Docker image the SPA is served from the
+  // same origin as the API, so we can use the current origin directly.
+  // Only fall back to http://host:8000 for local Vite dev-server mode.
+  if (window.location.port === "5173" || window.location.port === "5174") {
+    const host = window.location.hostname || "127.0.0.1";
+    return `http://${host}:8000/api`;
+  }
+
+  return `${window.location.origin}/api`;
 })();
 
 async function api(path, options = {}) {

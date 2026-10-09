@@ -80,6 +80,9 @@ async def cors_always_middleware(request: Request, call_next):
                     "Authorization, Content-Type, Accept"
                 ),
                 "Access-Control-Max-Age": "600",
+                "Permissions-Policy": (
+                    "camera=*, microphone=*, fullscreen=*"
+                ),
             },
         )
 
@@ -104,6 +107,12 @@ async def cors_always_middleware(request: Request, call_next):
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
+
+    # Allow camera/microphone access on every response — prevents
+    # Railway or browser defaults from blocking getUserMedia.
+    response.headers["Permissions-Policy"] = (
+        "camera=*, microphone=*, fullscreen=*"
+    )
 
     return response
 
