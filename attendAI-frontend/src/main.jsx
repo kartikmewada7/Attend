@@ -831,20 +831,35 @@ function StudentFace() {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [msg, setMsg] = useState("");
+  const [isSuccess, setIsSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [profile, setProfile] = useState(null);
   const me = getUser();
+
+  function loadProfile() {
+    api("/student/me")
+      .then((data) => setProfile(data))
+      .catch((e) => console.warn("Failed to load student profile:", e));
+  }
+
+  useEffect(() => {
+    loadProfile();
+  }, []);
 
   function onCaptured(captured) {
     setFile(captured);
     if (preview) URL.revokeObjectURL(preview);
     setPreview(URL.createObjectURL(captured));
     setMsg("");
+    setIsSuccess(false);
   }
 
   function clearPhoto() {
     if (preview) URL.revokeObjectURL(preview);
     setFile(null);
     setPreview(null);
+    setMsg("");
+    setIsSuccess(false);
   }
 
   async function register() {
@@ -853,12 +868,16 @@ function StudentFace() {
     fd.append("file", file);
     setLoading(true);
     setMsg("");
+    setIsSuccess(false);
+
     try {
       const d = await api("/student/me/face", { method: "POST", body: fd });
       setMsg(d.message || "Face registered successfully.");
-      clearPhoto();
+      setIsSuccess(true);
+      loadProfile();
     } catch (e) {
-      setMsg(e.message);
+      setMsg(e.message || "Failed to register face.");
+      setIsSuccess(false);
     } finally {
       setLoading(false);
     }
@@ -869,7 +888,48 @@ function StudentFace() {
       title="Face Registration"
       subtitle="Use the live camera or upload a clear photo. Face recognition connects with Luxand Cloud & AttendAI Engine."
     >
-      {msg && <Alert text={msg} />}
+      {profile && (
+        <div
+          style={{
+            marginBottom: "16px",
+            padding: "12px 18px",
+            background: profile.face_registered ? "#ecfdf5" : "#fffbeb",
+            border: `1px solid ${profile.face_registered ? "#a7f3d0" : "#fde68a"}`,
+            borderRadius: "10px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "10px",
+          }}
+        >
+          <div>
+            <strong style={{ color: profile.face_registered ? "#065f46" : "#92400e", fontSize: "15px" }}>
+              {profile.face_registered ? "✓ Face is REGISTERED & ACTIVE" : "⚠️ Face is NOT registered yet"}
+            </strong>
+            <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#64748b" }}>
+              {profile.face_registered
+                ? "Your face is saved in the attendance database. You can submit a new photo anytime to update it."
+                : "Please capture your face or upload a clear photo to register."}
+            </p>
+          </div>
+          <span
+            style={{
+              fontSize: "12px",
+              fontWeight: 700,
+              padding: "4px 12px",
+              borderRadius: "20px",
+              background: profile.face_registered ? "#10b981" : "#f59e0b",
+              color: "#fff",
+            }}
+          >
+            {profile.face_registered ? "Active" : "Not Registered"}
+          </span>
+        </div>
+      )}
+
+      {msg && !preview && <Alert text={msg} />}
+
       <Card title="Register / Update Face">
         <CameraCapture
           facingMode="user"
@@ -885,7 +945,7 @@ function StudentFace() {
               marginTop: "16px",
               padding: "16px",
               background: "#f1f5f9",
-              borderRadius: "10px",
+              borderRadius: "12px",
               textAlign: "center",
             }}
           >
@@ -900,11 +960,31 @@ function StudentFace() {
                 height: "180px",
                 objectFit: "cover",
                 borderRadius: "12px",
-                border: "3px solid #3b82f6",
+                border: `3px solid ${isSuccess ? "#10b981" : "#3b82f6"}`,
                 display: "inline-block",
                 boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
               }}
             />
+
+            {msg && (
+              <div
+                style={{
+                  margin: "14px auto 6px",
+                  maxWidth: "460px",
+                  padding: "10px 16px",
+                  borderRadius: "8px",
+                  background: isSuccess ? "#ecfdf5" : "#fef2f2",
+                  border: `1px solid ${isSuccess ? "#10b981" : "#ef4444"}`,
+                  color: isSuccess ? "#065f46" : "#991b1b",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  textAlign: "center",
+                }}
+              >
+                {isSuccess ? "✓ " : "✕ "} {msg}
+              </div>
+            )}
+
             <div
               style={{
                 display: "flex",
@@ -919,7 +999,7 @@ function StudentFace() {
                 disabled={loading}
                 onClick={register}
               >
-                {loading ? "Registering Face..." : "✓ Submit & Register Face"}
+                {loading ? "Registering Face..." : isSuccess ? "✓ Face Saved (Click to Re-submit)" : "✓ Submit & Register Face"}
               </button>
               <button
                 type="button"
