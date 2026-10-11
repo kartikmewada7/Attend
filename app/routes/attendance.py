@@ -1627,6 +1627,24 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             )
 
 
+        # Also send daily summary to parent if parent_email is registered
+        parent_em = (getattr(student, "parent_email", None) or "").strip()
+        if parent_em and parent_em.lower() != (student.email or "").strip().lower():
+            try:
+                _send_daily_summary_email(
+                    to_email=parent_em,
+                    student_name=f"{student.name} (Parent Notification)",
+                    summary_date=summary_date.strftime("%d-%m-%Y"),
+                    subject_rows=rows,
+                    overall_present=overall_present,
+                    overall_conducted=overall_conducted,
+                )
+            except Exception as parent_exc:
+                print(
+                    f"Daily summary for parent failed for student_id={student.id}: "
+                    f"{parent_exc}"
+                )
+
         # Commit after each student so one failure doesn't block others.
         try:
             db.commit()
