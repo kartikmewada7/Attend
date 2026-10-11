@@ -43,6 +43,7 @@ def me(user=Depends(require_role("student")), db: Session = Depends(get_db)):
     result = {
         "id": s.id, "name": s.name, "roll_number": s.enrollment_no,
         "enrollment_no": s.enrollment_no, "email": s.email,
+        "parent_email": s.parent_email,
         "department": d.name if d else None,
         "year": (sem.semester_number + 1) // 2 if sem else None,
         "semester": sem.semester_number if sem else None,

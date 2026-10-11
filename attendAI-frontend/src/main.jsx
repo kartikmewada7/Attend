@@ -216,6 +216,7 @@ function TeacherApp() {
       {href:"/teacher/subjects",label:"Subjects",icon:"📚"},
       {href:"/teacher/attendance",label:"Attendance",icon:"✓"},
       {href:"/teacher/face",label:"Face Attendance",icon:"📷"},
+      {href:"/teacher/summary",label:"Attendance Summary",icon:"📊"},
       {href:"/teacher/assignments",label:"Assignments",icon:"📝"},
       {href:"/teacher/marks",label:"MST Marks",icon:"🎯"},
       {href:"/teacher/profile",label:"Profile",icon:"⚙"}
@@ -226,6 +227,7 @@ function TeacherApp() {
         <Route path="subjects" element={<SubjectsPage />} />
         <Route path="attendance" element={<ManualAttendance />} />
         <Route path="face" element={<FaceAttendance />} />
+        <Route path="summary" element={<AttendanceSummary />} />
         <Route path="assignments" element={<TeacherAssignments />} />
         <Route path="marks" element={<TeacherMarks />} />
         <Route path="profile" element={<Profile />} />
@@ -240,6 +242,8 @@ function TeacherHome() {
     <QuickCard icon="👥" title="Students" text="Add students, import a whole batch and manage records." to="/teacher/students" />
     <QuickCard icon="📚" title="Subjects" text="Assign a subject to your semester section." to="/teacher/subjects" />
     <QuickCard icon="✓" title="Attendance" text="Mark attendance manually or use face recognition." to="/teacher/attendance" />
+    <QuickCard icon="📷" title="Face Attendance" text="Take attendance with AI face recognition." to="/teacher/face" />
+    <QuickCard icon="📊" title="Attendance Summary" text="View section-wise attendance % sorted by enrollment number." to="/teacher/summary" />
     <QuickCard icon="📝" title="Assignments" text="Create assignments and check submission status." to="/teacher/assignments" />
     <QuickCard icon="🎯" title="MST Marks" text="Enter marks for the selected subject." to="/teacher/marks" />
     <QuickCard icon="⚙" title="Profile" text="Update your teacher profile." to="/teacher/profile" />
@@ -251,11 +255,11 @@ function QuickCard({icon,title,text,to}) {
 }
 
 function StudentsPage() {
-  const [students,setStudents]=useState([]); const [form,setForm]=useState({name:"",email:"",dob:"",department:"CSE",semester:1,section:"S1",admission_year:new Date().getFullYear(),batch_digit:1});
+  const [students,setStudents]=useState([]); const [form,setForm]=useState({name:"",email:"",parent_email:"",dob:"",department:"CSE",semester:1,section:"S1",admission_year:new Date().getFullYear(),batch_digit:1});
   const [bulk,setBulk]=useState(""); const [bulkInfo,setBulkInfo]=useState({semester:1,section:"S1",department:"CSE",batch_digit:1,admission_year:new Date().getFullYear()}); const [msg,setMsg]=useState("");
   const load=()=>api("/students").then(setStudents).catch(e=>setMsg(e.message));
   useEffect(load,[]);
-  async function add(){try{await api("/students",{method:"POST",body:JSON.stringify({...form,semester:Number(form.semester),admission_year:Number(form.admission_year),batch_digit:Number(form.batch_digit)})});setMsg("Student added. Default password is DOB.");setForm({...form,name:"",email:"",dob:""});load();}catch(e){setMsg(e.message)}}
+  async function add(){try{await api("/students",{method:"POST",body:JSON.stringify({...form,semester:Number(form.semester),admission_year:Number(form.admission_year),batch_digit:Number(form.batch_digit)})});setMsg("Student added. Default password is DOB.");setForm({...form,name:"",email:"",parent_email:"",dob:""});load();}catch(e){setMsg(e.message)}}
   async function bulkAdd(){try{const qs=new URLSearchParams({semester:bulkInfo.semester,section:bulkInfo.section,department:bulkInfo.department,batch_digit:bulkInfo.batch_digit,admission_year:bulkInfo.admission_year}); const body=new URLSearchParams({names:bulk}); const d=await api(`/students/bulk?${qs}`,{method:"POST",body});setMsg(`${d.count} students imported and sorted A-Z.`);setBulk("");load();}catch(e){setMsg(e.message)}}
   async function del(id){if(!confirm("Deactivate this student?"))return;try{await api(`/students/${id}`,{method:"DELETE"});load();}catch(e){setMsg(e.message)}}
   return <PageSection title="Students" subtitle="Add one student or paste many names at once.">
@@ -264,7 +268,8 @@ function StudentsPage() {
       <Card title="Add Student">
         <div className="form-grid">
           <Field label="Name"><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
-          <Field label="Email"><input value={form.email||""} onChange={e=>setForm({...form,email:e.target.value})} type="email"/></Field>
+          <Field label="Email"><input value={form.email||""} onChange={e=>setForm({...form,email:e.target.value})} type="email" placeholder="student@example.com"/></Field>
+          <Field label="Parent's Email"><input value={form.parent_email||""} onChange={e=>setForm({...form,parent_email:e.target.value})} type="email" placeholder="parent@example.com"/></Field>
           <Field label="DOB"><input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} type="date"/></Field>
           <Field label="Department"><input value={form.department} onChange={e=>setForm({...form,department:e.target.value})}/></Field>
           <Field label="Semester"><input value={form.semester} onChange={e=>setForm({...form,semester:e.target.value})} type="number" min="1" max="8"/></Field>
@@ -287,8 +292,8 @@ function StudentsPage() {
       </Card>
     </div>
     <Card title={`Student List (${students.length})`}>
-      <DataTable headers={["Name","Enrollment","Semester","Section","Face","Action"]} rows={students.map(s=>[
-        s.name,s.enrollment_no,s.semester||"-",s.section||"-",s.face_registered?"✓ Registered":"Not registered",
+      <DataTable headers={["Name","Enrollment","Student Email","Parent's Email","Semester","Section","Face","Action"]} rows={students.map(s=>[
+        s.name,s.enrollment_no,s.email||"—",s.parent_email||"—",s.semester||"-",s.section||"-",s.face_registered?"✓ Registered":"Not registered",
         <button className="danger small" onClick={()=>del(s.id)}>Delete</button>
       ])}/>
     </Card>
@@ -749,25 +754,268 @@ function FaceAttendance() {
 }
 
 function TeacherAssignments() {
-  const [subs,setSubs]=useState([]),[list,setList]=useState([]),[form,setForm]=useState({subject_id:"",section_id:"",title:"",description:"",due_date:""}),[file,setFile]=useState(null),[msg,setMsg]=useState("");
+  const [subs,setSubs]=useState([]),[list,setList]=useState([]),[form,setForm]=useState({subject_id:"",section_id:"",section_name:"",title:"",description:"",due_date:""}),[file,setFile]=useState(null),[msg,setMsg]=useState("");
   async function load(){try{setSubs(await api("/attendance/subjects"));setList(await api("/assignments/teacher"))}catch(e){setMsg(e.message)}}
   useEffect(()=>{load()},[]);
-  async function create(){try{const fd=new FormData();fd.append("subject_id",form.subject_id);fd.append("section_id",form.section_id);fd.append("title",form.title);fd.append("description",form.description);fd.append("due_date",form.due_date);if(file)fd.append("file",file);await api("/assignments",{method:"POST",body:fd});setMsg("Assignment created.");setForm({...form,title:"",description:"",due_date:""});setFile(null);load()}catch(e){setMsg(e.message)}}
+  async function create(){
+    if(!form.subject_id || !form.section_id){ setMsg("Please select a subject and section."); return; }
+    if(!form.title.trim()){ setMsg("Please enter an assignment title."); return; }
+    if(!form.due_date){ setMsg("Please select a due date."); return; }
+    try{
+      const fd=new FormData();
+      fd.append("subject_id",form.subject_id);
+      fd.append("section_id",form.section_id);
+      fd.append("title",form.title.trim());
+      fd.append("description",form.description||"");
+      fd.append("due_date",form.due_date);
+      if(file)fd.append("file",file);
+      await api("/assignments",{method:"POST",body:fd});
+      setMsg("Assignment created successfully.");
+      setForm({...form,title:"",description:"",due_date:""});
+      setFile(null);
+      load();
+    }catch(e){setMsg(e.message)}
+  }
   return <PageSection title="Assignments" subtitle="Create PDF/DOC/DOCX assignments with a due date.">
     {msg&&<Alert text={msg}/>}
     <Card title="Create Assignment">
       <div className="form-grid">
-        <Field label="Subject"><select value={form.subject_id} onChange={e=>{const s=subs.find(x=>String(x.id)===e.target.value);setForm({...form,subject_id:e.target.value,section_id:s?.section_id||""})}}><option value="">Select</option>{subs.map(s=><option key={`${s.id}-${s.section_id}`} value={s.id}>{s.name} — {s.section}</option>)}</select></Field>
-        <Field label="Section"><input value={form.section_id} readOnly/></Field>
-        <Field label="Title"><input value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></Field>
+        <Field label="Subject & Section">
+          <select
+            value={form.subject_id && form.section_id ? `${form.subject_id}___${form.section_id}` : ""}
+            onChange={e=>{
+              const val=e.target.value;
+              if(!val){ setForm({...form,subject_id:"",section_id:"",section_name:""}); return; }
+              const [subId,secId]=val.split("___");
+              const s=subs.find(x=>String(x.id)===subId && String(x.section_id)===secId);
+              setForm({...form,subject_id:subId,section_id:secId,section_name:s?`${s.section} (Sem ${s.semester})`:""});
+            }}>
+            <option value="">Select Subject & Section</option>
+            {subs.map(s=><option key={`${s.id}-${s.section_id}`} value={`${s.id}___${s.section_id}`}>{s.name} — {s.section} (Sem {s.semester})</option>)}
+          </select>
+        </Field>
+        <Field label="Selected Section"><input value={form.section_name || form.section_id || ""} readOnly placeholder="Auto-selected with subject"/></Field>
+        <Field label="Title"><input value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="e.g. Unit 1 Assignment"/></Field>
         <Field label="Due Date"><input type="datetime-local" value={form.due_date} onChange={e=>setForm({...form,due_date:e.target.value})}/></Field>
       </div>
-      <Field label="Description"><textarea rows="4" value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></Field>
+      <Field label="Description"><textarea rows="4" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} placeholder="Assignment instructions or questions..."/></Field>
       <Field label="File (optional)"><input type="file" accept=".pdf,.doc,.docx" onChange={e=>setFile(e.target.files?.[0]||null)}/></Field>
       <button className="primary" onClick={create}>Create Assignment</button>
     </Card>
-    <Card title="Created Assignments"><DataTable headers={["Title","Due","File"]} rows={list.map(x=>[x.title,new Date(x.due_date).toLocaleString(),x.file_name||"—"])}/></Card>
+    <Card title="Created Assignments"><DataTable headers={["Title","Due Date","Attached File"]} rows={list.map(x=>[x.title,new Date(x.due_date).toLocaleString(),x.file_name ? <a href={`/api/assignments/${x.id}/file`} target="_blank" rel="noreferrer" style={{color:"var(--accent)",textDecoration:"underline"}}>📥 {x.file_name}</a> : "—"])}/></Card>
   </PageSection>;
+}
+
+function AttendanceSummary() {
+  const [structure, setStructure] = useState({ years: [], semesters: [], sections: [] });
+  const [teacherSubs, setTeacherSubs] = useState([]);
+  const [year, setYear] = useState("");
+  const [semester, setSemester] = useState("");
+  const [section, setSection] = useState("");
+  const [subject, setSubject] = useState("");
+  const [summaryData, setSummaryData] = useState(null);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    Promise.all([
+      api("/attendance/structure").catch(() => null),
+      api("/attendance/subjects").catch(() => []),
+    ]).then(([struct, subs]) => {
+      if (struct) setStructure(struct);
+      if (subs) setTeacherSubs(subs);
+    });
+  }, []);
+
+  const availableSemesters = useMemo(() => {
+    if (!year) return structure.semesters;
+    return structure.semesters.filter(s => String(s.year) === String(year) || String(s.year_id) === String(year));
+  }, [structure.semesters, year]);
+
+  const availableSections = useMemo(() => {
+    if (!semester) return structure.sections;
+    return structure.sections.filter(sec => String(sec.semester_id) === String(semester));
+  }, [structure.sections, semester]);
+
+  const availableSubjects = useMemo(() => {
+    if (!section) return teacherSubs;
+    return teacherSubs.filter(s => String(s.section_id) === String(section));
+  }, [teacherSubs, section]);
+
+  async function loadSummary(secId, subId) {
+    if (!secId) { setSummaryData(null); return; }
+    setLoading(true);
+    setMsg("");
+    try {
+      const qs = new URLSearchParams({ section_id: secId });
+      if (subId) qs.append("subject_id", subId);
+      const data = await api(`/attendance/summary?${qs}`);
+      setSummaryData(data);
+    } catch (e) {
+      setMsg(e.message);
+      setSummaryData(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleYearChange(yVal) {
+    setYear(yVal);
+    setSemester("");
+    setSection("");
+    setSubject("");
+    setSummaryData(null);
+  }
+
+  function handleSemesterChange(semVal) {
+    setSemester(semVal);
+    setSection("");
+    setSubject("");
+    setSummaryData(null);
+  }
+
+  function handleSectionChange(secVal) {
+    setSection(secVal);
+    setSubject("");
+    if (secVal) {
+      loadSummary(secVal, "");
+    } else {
+      setSummaryData(null);
+    }
+  }
+
+  function handleSubjectChange(subVal) {
+    setSubject(subVal);
+    if (section) {
+      loadSummary(section, subVal);
+    }
+  }
+
+  const studentsList = summaryData?.students || [];
+  const filteredStudents = useMemo(() => {
+    if (!search.trim()) return studentsList;
+    const q = search.toLowerCase();
+    return studentsList.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      s.enrollment_no.toLowerCase().includes(q)
+    );
+  }, [studentsList, search]);
+
+  const stats = useMemo(() => {
+    if (!studentsList.length) return null;
+    const total = studentsList.length;
+    const avg = Math.round(studentsList.reduce((acc, s) => acc + s.percentage, 0) / total * 10) / 10;
+    const shortage = studentsList.filter(s => s.percentage < 75).length;
+    return { total, avg, shortage };
+  }, [studentsList]);
+
+  return (
+    <PageSection
+      title="Attendance Summary"
+      subtitle="View student-wise attendance percentages sorted by enrollment number."
+    >
+      {msg && <Alert text={msg} />}
+      <Card title="Select Year, Semester & Section">
+        <div className="form-grid">
+          <Field label="Year">
+            <select value={year} onChange={e => handleYearChange(e.target.value)}>
+              <option value="">All Years</option>
+              {structure.years.map(y => (
+                <option key={y.id} value={y.year_number}>{y.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Semester">
+            <select value={semester} onChange={e => handleSemesterChange(e.target.value)}>
+              <option value="">Select Semester</option>
+              {availableSemesters.map(s => (
+                <option key={s.id} value={s.id}>{s.name} (Sem {s.semester_number})</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Section">
+            <select value={section} onChange={e => handleSectionChange(e.target.value)}>
+              <option value="">Select Section</option>
+              {availableSections.map(sec => (
+                <option key={sec.id} value={sec.id}>{sec.section_code} — {sec.department_name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Subject (Optional)">
+            <select value={subject} onChange={e => handleSubjectChange(e.target.value)} disabled={!section}>
+              <option value="">All Subjects (Overall)</option>
+              {availableSubjects.map(s => (
+                <option key={`${s.id}-${s.section_id}`} value={s.id}>{s.name} ({s.code})</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+      </Card>
+
+      {loading && <p style={{textAlign:"center",padding:"1rem",opacity:0.7}}>Loading attendance summary...</p>}
+
+      {stats && (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(180px, 1fr))",gap:"1rem",margin:"1rem 0"}}>
+          <Stat value={stats.total} label="Total Students" />
+          <Stat value={summaryData?.total_classes || 0} label="Classes Conducted" />
+          <Stat value={`${stats.avg}%`} label="Class Average Attendance" />
+          <Stat value={stats.shortage} label="Students Below 75%" />
+        </div>
+      )}
+
+      {summaryData && (
+        <Card title={`Attendance Summary — Section ${summaryData.section.code} (${filteredStudents.length} Students)`}>
+          <div style={{marginBottom:"1rem"}}>
+            <input
+              type="text"
+              placeholder="🔍 Search by student name or enrollment number..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{width:"100%",maxWidth:"400px"}}
+            />
+          </div>
+          <DataTable
+            headers={["S.No", "Enrollment No.", "Student Name", "Present / Total", "Attendance %", "Status"]}
+            rows={filteredStudents.map((s, idx) => {
+              const isEligible = s.percentage >= 75;
+              const isWarning = s.percentage >= 60 && s.percentage < 75;
+              const badgeClass = isEligible ? "pill present" : isWarning ? "pill" : "pill absent";
+              return [
+                idx + 1,
+                <strong>{s.enrollment_no}</strong>,
+                s.name,
+                `${s.attended} / ${s.total}`,
+                <div style={{display:"flex",alignItems:"center",gap:"0.5rem"}} key={s.id}>
+                  <div style={{
+                    width:"60px",
+                    height:"8px",
+                    background:"#eee",
+                    borderRadius:"4px",
+                    overflow:"hidden"
+                  }}>
+                    <div style={{
+                      width:`${Math.min(s.percentage, 100)}%`,
+                      height:"100%",
+                      background: isEligible ? "#10b981" : isWarning ? "#f59e0b" : "#ef4444"
+                    }}/>
+                  </div>
+                  <strong>{s.percentage}%</strong>
+                </div>,
+                <span className={badgeClass} key={`b-${s.id}`}>{isEligible ? "Eligible" : isWarning ? "Warning" : "Shortage"}</span>
+              ];
+            })}
+          />
+        </Card>
+      )}
+
+      {!loading && !section && (
+        <div className="empty" style={{marginTop:"1rem"}}>
+          Please select a Semester and Section above to view the attendance summary.
+        </div>
+      )}
+    </PageSection>
+  );
 }
 
 function TeacherMarks() {
@@ -813,7 +1061,16 @@ function StudentApp() {
 function StudentHome() {
   const [me,setMe]=useState(null); useEffect(()=>{api("/student/me").then(setMe)},[]);
   return <PageSection title="Student Dashboard" subtitle="Your academic information at a glance.">
-    <div className="profile-banner"><div className="avatar large">{(me?.name||"?").slice(0,1)}</div><div><h2>{me?.name||"Loading..."}</h2><p>{me?.enrollment_no||""}</p><p>{me?.department||""} · Semester {me?.semester||"-"} · Section {me?.section||"-"}</p></div></div>
+    <div className="profile-banner">
+      <div className="avatar large">{(me?.name||"?").slice(0,1)}</div>
+      <div>
+        <h2>{me?.name||"Loading..."}</h2>
+        <p>{me?.enrollment_no||""}</p>
+        <p>{me?.department||""} · Semester {me?.semester||"-"} · Section {me?.section||"-"}</p>
+        {me?.email && <p style={{fontSize:"0.88rem",opacity:0.85,marginTop:"4px"}}>📧 Student Email: {me.email}</p>}
+        {me?.parent_email && <p style={{fontSize:"0.88rem",opacity:0.85,marginTop:"2px"}}>👨‍👩‍👧 Parent's Email: {me.parent_email}</p>}
+      </div>
+    </div>
     <div className="grid-cards">
       <QuickCard icon="✓" title="Attendance" text="See subject-wise attendance percentage." to="/student/attendance"/>
       <QuickCard icon="📷" title="Face Registration" text={me?.face_registered?"Face is registered. You can update it.":"Register your face using camera/photo."} to="/student/face"/>
@@ -1022,8 +1279,24 @@ function StudentFace() {
 }
 
 function StudentAssignments() {
-  const [list,setList]=useState([]),[msg,setMsg]=useState(""); useEffect(()=>{api("/assignments/student").then(setList).catch(e=>setMsg(e.message))},[]);
-  return <PageSection title="My Assignments" subtitle="Pending, overdue and submitted assignments.">{msg&&<Alert text={msg}/>}<Card title={`Assignments (${list.length})`}><DataTable headers={["Subject","Title","Due","Status"]} rows={list.map(x=>[x.subject,x.title,new Date(x.due_date).toLocaleString(),<span className={`pill ${String(x.status).toLowerCase()}`}>{x.status}</span>])}/></Card></PageSection>;
+  const [list,setList]=useState([]),[msg,setMsg]=useState("");
+  useEffect(()=>{api("/assignments/student").then(setList).catch(e=>setMsg(e.message))},[]);
+  return <PageSection title="My Assignments" subtitle="Pending, overdue and submitted assignments.">
+    {msg&&<Alert text={msg}/>}
+    <Card title={`Assignments (${list.length})`}>
+      <DataTable
+        headers={["Subject","Title","Description","Due Date","File Attachment","Status"]}
+        rows={list.map(x=>[
+          x.subject,
+          x.title,
+          x.description || "—",
+          new Date(x.due_date).toLocaleString(),
+          x.file_name ? <a href={`/api/assignments/${x.id}/file`} target="_blank" rel="noreferrer" style={{color:"var(--accent)",textDecoration:"underline"}}>📥 {x.file_name}</a> : "—",
+          <span className={`pill ${String(x.status).toLowerCase()}`} key={`s-${x.id}`}>{x.status}</span>
+        ])}
+      />
+    </Card>
+  </PageSection>;
 }
 function StudentMarks() {
   const [list,setList]=useState([]),[msg,setMsg]=useState(""); useEffect(()=>{api("/marks/student").then(setList).catch(e=>setMsg(e.message))},[]);

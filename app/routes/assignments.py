@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -20,7 +21,10 @@ def teacher_assignments(user=Depends(require_role("teacher")),db:Session=Depends
 @router.post("")
 async def create_assignment(subject_id:int=Form(...),section_id:int=Form(...),title:str=Form(...),description:str|None=Form(None),due_date:str=Form(...),file:UploadFile|None=File(None),user=Depends(require_role("teacher")),db:Session=Depends(get_db)):
     if not allowed(db,user["id"],subject_id,section_id): raise HTTPException(403,"Subject/section not assigned")
-    try: due=datetime.fromisoformat(due_date)
+    try:
+        due=datetime.fromisoformat(due_date)
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
     except ValueError: raise HTTPException(400,"due_date must be ISO datetime")
     path=None; filename=None
     if file:
@@ -35,10 +39,20 @@ async def create_assignment(subject_id:int=Form(...),section_id:int=Form(...),ti
 @router.get("/student")
 def student_assignments(user=Depends(require_role("student")),db:Session=Depends(get_db)):
     s=db.get(Student,user["id"])
+    if not s:
+        return []
+    now = datetime.now(timezone.utc)
     rows=db.execute(select(Assignment,Subject.name,Subject.code,AssignmentSubmission.status,AssignmentSubmission.submitted_at).join(Subject,Subject.id==Assignment.subject_id).outerjoin(AssignmentSubmission,(AssignmentSubmission.assignment_id==Assignment.id)&(AssignmentSubmission.student_id==s.id)).where(Assignment.section_id==s.current_section_id,Assignment.is_active.is_(True)).order_by(Assignment.due_at)).all()
     out=[]
     for a,name,code,status,submitted_at in rows:
-        out.append({"id":a.id,"subject_id":a.subject_id,"subject":name,"code":code,"title":a.title,"description":a.description,"file_name":a.file_name,"due_date":a.due_at,"status":status or ("overdue" if a.due_at<datetime.utcnow() else "pending"),"submitted_at":submitted_at})
+        due = a.due_at
+        if due is not None:
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            is_overdue = due < now
+        else:
+            is_overdue = False
+        out.append({"id":a.id,"subject_id":a.subject_id,"subject":name,"code":code,"title":a.title,"description":a.description,"file_name":a.file_name,"due_date":a.due_at,"status":status or ("overdue" if is_overdue else "pending"),"submitted_at":submitted_at})
     return out
 
 @router.get("/{assignment_id}/file")

@@ -301,14 +301,6 @@ async def process_attendance(
         for attendance in attendance_rows:
             student = db.get(Student, attendance.student_id)
             if student:
-                # Convert the timestamp to India Standard Time for the email.
-                if attendance.marked_at:
-                    marked_at = attendance.marked_at
-                    if marked_at.tzinfo is None:
-                        marked_at = marked_at.replace(tzinfo=timezone.utc)
-                    attendance.marked_at = marked_at.astimezone(
-                        ZoneInfo("Asia/Kolkata")
-                    )
                 send_attendance_confirmation(
                     db,
                     attendance,

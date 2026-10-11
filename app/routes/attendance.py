@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 
 from pydantic import BaseModel
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sqlalchemy.orm import Session
@@ -21,6 +21,8 @@ from app.database import get_db
 from app.deps import require_role
 
 from app.models import (
+
+    AcademicYear,
 
     Subject,
 
@@ -260,9 +262,22 @@ def send_attendance_confirmation(
 
     """
 
-    if not student.email:
-
+    if not student.email and not getattr(student, "parent_email", None):
         return
+
+    ist = ZoneInfo("Asia/Kolkata")
+    marked = attendance.marked_at
+    if marked is not None:
+        if marked.tzinfo is None:
+            marked = marked.replace(tzinfo=timezone.utc)
+        local_marked = marked.astimezone(ist)
+    else:
+        local_marked = datetime.now(ist)
+
+    date_str = local_marked.strftime("%d-%m-%Y")
+    time_str = local_marked.strftime("%I:%M %p")
+
+    primary_email = student.email or student.parent_email
 
     # Reuse an existing log for this attendance record. This prevents a
     # duplicate-key error if a previous attempt created a PENDING/FAILED log.
@@ -273,17 +288,11 @@ def send_attendance_confirmation(
         )
     )
 
-    ist = ZoneInfo("Asia/Kolkata")
-    marked = attendance.marked_at
-    if marked.tzinfo is None:
-        marked = marked.replace(tzinfo=timezone.utc)
-    local_marked = marked.astimezone(ist)
-
     if existing_log:
         if existing_log.status == "SENT":
             return
         log = existing_log
-        log.email_address = student.email
+        log.email_address = primary_email
         log.status = "PENDING"
         log.error_message = None
     else:
@@ -292,7 +301,7 @@ def send_attendance_confirmation(
             attendance_id=attendance.id,
             email_type="ATTENDANCE",
             reference_date=local_marked.date(),
-            email_address=student.email,
+            email_address=primary_email,
             status="PENDING",
         )
         db.add(log)
@@ -300,43 +309,41 @@ def send_attendance_confirmation(
     db.flush()
 
     try:
+        if student.email:
+            send_attendance_email(
+                to_email=student.email,
+                student_name=student.name,
+                subject_name=subject.name,
+                attendance_date=date_str,
+                attendance_time=time_str,
+                status=attendance.status,
+            )
 
-        send_attendance_email(
-
-            to_email=student.email,
-
-            student_name=student.name,
-
-            subject_name=subject.name,
-
-            attendance_date=local_marked.strftime(
-
-                "%d-%m-%Y"
-
-            ),
-
-            attendance_time=local_marked.strftime(
-
-                "%I:%M %p"
-
-            ),
-
-            status=attendance.status,
-
-        )
+        parent_em = getattr(student, "parent_email", None)
+        if (
+            parent_em
+            and parent_em.strip()
+            and parent_em.strip().lower() != (student.email or "").strip().lower()
+        ):
+            try:
+                send_attendance_email(
+                    to_email=parent_em.strip(),
+                    student_name=f"{student.name} (Parent Notification)",
+                    subject_name=subject.name,
+                    attendance_date=date_str,
+                    attendance_time=time_str,
+                    status=attendance.status,
+                )
+            except Exception as parent_err:
+                print(f"Failed to send parent attendance email: {parent_err}")
 
         log.status = "SENT"
-
         log.sent_at = datetime.now(timezone.utc)
-
         log.error_message = None
 
     except Exception as exc:
-
         log.status = "FAILED"
-
         log.error_message = str(exc)
-
         # Attendance should still be saved even if email fails.
 
         # Do not raise the email error here.
@@ -953,7 +960,7 @@ def mark(
 
         row.source = "MANUAL"
 
-        row.marked_at = datetime.now(timezone.utc)
+        row.marked_at = datetime.utcnow()
 
         attendance_record = row
 
@@ -1169,7 +1176,7 @@ def bulk_mark(
 
             row.source = "MANUAL"
 
-            row.marked_at = datetime.now(timezone.utc)
+            row.marked_at = datetime.utcnow()
 
             attendance_record = row
 
@@ -1660,3 +1667,117 @@ def daily_summary(
 
     today_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     return _send_daily_summaries_for_date(db, today_ist)
+
+
+@router.get("/structure")
+def academic_structure(
+    db: Session = Depends(get_db),
+    user=Depends(require_role("teacher")),
+):
+    years_db = db.scalars(select(AcademicYear).order_by(AcademicYear.year_number)).all()
+    years = [
+        {"id": y.id, "year_number": y.year_number, "name": y.name}
+        for y in years_db
+    ] if years_db else [
+        {"id": 1, "year_number": 1, "name": "1st Year"},
+        {"id": 2, "year_number": 2, "name": "2nd Year"},
+        {"id": 3, "year_number": 3, "name": "3rd Year"},
+        {"id": 4, "year_number": 4, "name": "4th Year"},
+    ]
+
+    semesters = db.scalars(select(Semester).order_by(Semester.semester_number)).all()
+    sections = db.execute(
+        select(Section, Department.name)
+        .join(Department, Department.id == Section.department_id)
+        .order_by(Section.section_code)
+    ).all()
+
+    return {
+        "years": years,
+        "semesters": [
+            {
+                "id": s.id,
+                "year_id": s.year_id,
+                "semester_number": s.semester_number,
+                "name": s.name,
+                "year": (s.semester_number + 1) // 2,
+            }
+            for s in semesters
+        ],
+        "sections": [
+            {
+                "id": sec.id,
+                "section_code": sec.section_code,
+                "semester_id": sec.semester_id,
+                "department_id": sec.department_id,
+                "department_name": dept_name,
+            }
+            for sec, dept_name in sections
+        ],
+    }
+
+
+@router.get("/summary")
+def attendance_summary(
+    section_id: int,
+    subject_id: int | None = None,
+    db: Session = Depends(get_db),
+    user=Depends(require_role("teacher")),
+):
+    sec = db.get(Section, section_id)
+    if not sec:
+        raise HTTPException(404, "Section not found")
+    sem = db.get(Semester, sec.semester_id)
+    dept = db.get(Department, sec.department_id)
+
+    sess_query = select(AttendanceSession.id).where(AttendanceSession.section_id == section_id)
+    if subject_id:
+        sess_query = sess_query.where(AttendanceSession.subject_id == subject_id)
+    session_ids = db.scalars(sess_query).all()
+    total_classes = len(session_ids)
+
+    students = db.scalars(
+        select(Student)
+        .where(Student.current_section_id == section_id, Student.is_active.is_(True))
+        .order_by(Student.enrollment_no, Student.roll_no)
+    ).all()
+
+    student_summaries = []
+    for s in students:
+        if session_ids:
+            attended = db.scalar(
+                select(func.count(Attendance.id)).where(
+                    Attendance.student_id == s.id,
+                    Attendance.session_id.in_(session_ids),
+                    Attendance.status == "PRESENT",
+                )
+            ) or 0
+        else:
+            attended = 0
+
+        pct = round((attended / total_classes * 100), 1) if total_classes > 0 else 0.0
+
+        student_summaries.append({
+            "id": s.id,
+            "roll_no": s.roll_no,
+            "enrollment_no": s.enrollment_no,
+            "name": s.name,
+            "email": s.email,
+            "parent_email": s.parent_email,
+            "attended": attended,
+            "total": total_classes,
+            "percentage": pct,
+        })
+
+    return {
+        "section": {
+            "id": sec.id,
+            "code": sec.section_code,
+            "semester_id": sem.id if sem else None,
+            "semester_number": sem.semester_number if sem else None,
+            "department": dept.name if dept else None,
+        },
+        "total_classes": total_classes,
+        "students": student_summaries,
+    }
+

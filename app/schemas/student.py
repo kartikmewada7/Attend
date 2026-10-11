@@ -4,7 +4,8 @@ from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 class StudentBase(BaseModel):
     name: str
     roll_number: str | None = None
-    email: EmailStr | None = None
+    email: str | None = None
+    parent_email: str | None = None
     course: str | None = None
     dob: date
     department: str | None = None
@@ -21,6 +22,13 @@ class StudentBase(BaseModel):
         v=v.strip()
         return v or None
 
+    @field_validator("email", "parent_email")
+    @classmethod
+    def normalize_email(cls, v):
+        if v is None: return None
+        v = v.strip()
+        return v if v else None
+
 class StudentCreate(StudentBase):
     pass
 
@@ -28,7 +36,8 @@ class StudentOut(BaseModel):
     id: int
     name: str
     roll_number: str
-    email: EmailStr | None
+    email: str | None
+    parent_email: str | None = None
     course: str | None
     dob: date | None
     department: str | None
