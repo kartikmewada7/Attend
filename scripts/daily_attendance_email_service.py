@@ -5,6 +5,14 @@ From repository root:
 
 Uses the existing database models and Brevo email service. Does not modify API routes.
 """
+
+import os
+import sys
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import logging
 from datetime import date, datetime, timezone
 from html import escape
@@ -196,4 +204,4 @@ def run_daily_summary(run_date: date | None = None) -> dict:
 
 
 if __name__ == "__main__":
-    run_daily_summary()
+    run_daily_summary()
