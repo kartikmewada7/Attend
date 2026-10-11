@@ -10,11 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 
 from sqlalchemy import select, func
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from sqlalchemy.orm import Session
 
 from app.cache import cache
+from app.core.config import settings
 
 from app.database import get_db
 
@@ -1417,9 +1417,9 @@ def _send_daily_summary_email(
     overall_present: int,
     overall_conducted: int,
 ) -> None:
-    api_key = os.getenv("BREVO_API_KEY")
-    from_email = os.getenv("BREVO_FROM_EMAIL")
-    from_name = os.getenv("BREVO_FROM_NAME", "AttendAI")
+    api_key = os.getenv("BREVO_API_KEY") or settings.BREVO_API_KEY
+    from_email = os.getenv("BREVO_FROM_EMAIL") or settings.BREVO_FROM_EMAIL
+    from_name = os.getenv("BREVO_FROM_NAME") or settings.BREVO_FROM_NAME or "AttendAI"
 
     if not api_key or not from_email:
         raise RuntimeError("BREVO_API_KEY or BREVO_FROM_EMAIL is not configured")
@@ -1538,13 +1538,15 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             continue
 
         # Check if a summary was already sent for this date.
-        existing = db.scalar(
-            select(AttendanceEmailLog).where(
+        existing = db.scalars(
+            select(AttendanceEmailLog)
+            .where(
                 AttendanceEmailLog.student_id == student.id,
                 AttendanceEmailLog.email_type == "DAILY_SUMMARY",
                 AttendanceEmailLog.reference_date == summary_date,
             )
-        )
+            .order_by(AttendanceEmailLog.id.desc())
+        ).first()
 
         if existing and existing.status == "SENT":
             skipped += 1
@@ -1565,65 +1567,29 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             overall_present += present
             overall_conducted += conducted
 
-        # Upsert the email log row — use ON CONFLICT DO UPDATE to always
-        # succeed, even on repeated/concurrent cron executions.
+        # Upsert the email log row
         try:
             if existing:
                 log = existing
                 log.email_address = student.email
                 log.status = "PENDING"
                 log.error_message = None
-                db.flush()
             else:
-                stmt = (
-                    pg_insert(AttendanceEmailLog)
-                    .values(
-                        student_id=student.id,
-                        attendance_id=None,
-                        email_type="DAILY_SUMMARY",
-                        reference_date=summary_date,
-                        email_address=student.email,
-                        status="PENDING",
-                    )
-                    .on_conflict_do_update(
-                        index_elements=[
-                            "student_id",
-                            "email_type",
-                            "reference_date",
-                        ],
-                        set_={
-                            "email_address": student.email,
-                            "status": "PENDING",
-                            "error_message": None,
-                        },
-                    )
-                    .returning(AttendanceEmailLog.id)
+                log = AttendanceEmailLog(
+                    student_id=student.id,
+                    attendance_id=None,
+                    email_type="DAILY_SUMMARY",
+                    reference_date=summary_date,
+                    email_address=student.email,
+                    status="PENDING",
                 )
-                result = db.execute(stmt)
-                db.flush()
-
-                log_id = result.scalar_one_or_none()
-                if log_id is None:
-                    failed += 1
-                    continue
-
-                log = db.scalar(
-                    select(AttendanceEmailLog).where(
-                        AttendanceEmailLog.id == log_id,
-                    )
-                )
-                if log is None:
-                    failed += 1
-                    continue
-
-                if log.status == "SENT":
-                    skipped += 1
-                    continue
-
+                db.add(log)
+            db.flush()
         except Exception as upsert_exc:
             # Rollback the failed flush and skip this student.
             db.rollback()
             failed += 1
+            print(f"Log creation failed for student_id={student.id}: {upsert_exc}")
             continue
 
         try:
