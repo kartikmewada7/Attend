@@ -1639,10 +1639,27 @@ def _send_daily_summaries_for_date(db: Session, summary_date: date) -> dict:
             log.sent_at = datetime.utcnow()
             log.error_message = None
             sent += 1
-        except (HTTPError, URLError, Exception) as exc:
+        
+        except Exception as exc:
+            error_detail = str(exc)
+
+            if isinstance(exc, HTTPError):
+                try:
+                    error_detail = (
+                        f"Brevo HTTP {exc.code}: "
+                        f"{exc.read().decode('utf-8', errors='replace')}"
+                    )
+                except Exception:
+                    pass
+
             log.status = "FAILED"
-            log.error_message = str(exc)
+            log.error_message = error_detail
             failed += 1
+            print(
+                f"Daily summary failed for student_id={student.id}: "
+                f"{error_detail}"
+            )
+
 
         # Commit after each student so one failure doesn't block others.
         try:
