@@ -610,7 +610,7 @@ function CameraCapture({
               Live Camera Preview
             </p>
             <p style={{ margin: "4px 0 0", fontSize: "13px" }}>
-              Click "Open Live Camera" or "Upload Photo" below
+              Click "Open Live Camera" below to take real-time photo
             </p>
           </div>
         )}
@@ -653,34 +653,6 @@ function CameraCapture({
             </button>
           </>
         )}
-
-        <label
-          className="link-btn"
-          style={{
-            cursor: "pointer",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "4px",
-            border: "1px solid #cbd5e1",
-            padding: "8px 14px",
-            borderRadius: "6px",
-          }}
-        >
-          📁 {maxPhotos > 1 ? "Upload Photos" : "Choose Photo from Device"}
-          <input
-            type="file"
-            accept="image/*"
-            multiple={maxPhotos > 1}
-            capture={facingMode === "user" ? "user" : "environment"}
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const files = Array.from(e.target.files || []);
-              files.slice(0, maxPhotos - capturedCount).forEach(onCapture);
-              e.target.value = "";
-            }}
-            disabled={disabled || capturedCount >= maxPhotos}
-          />
-        </label>
       </div>
 
       <p className="hint" style={{ marginTop: "8px" }}>
@@ -709,7 +681,7 @@ function FaceAttendance() {
     }catch(e){setMsg(e.message)}finally{setLoading(false)}
   }
 
-  return <PageSection title="Face Attendance" subtitle="Use live camera or upload classroom photos. Facial recognition identifies registered students.">
+  return <PageSection title="Face Attendance" subtitle="Use live camera to capture classroom photos. Facial recognition identifies registered students.">
     {msg&&<Alert text={msg}/>}
     <Card title="1. Select Subject + Section">
       <select value={selected} onChange={e=>{setSelected(e.target.value);setFiles([]);setResult(null);setMsg("")}}>
@@ -717,7 +689,7 @@ function FaceAttendance() {
         {subs.map(s=><option value={s.id} key={`${s.id}-${s.section_id}`}>{s.name} — {s.section} (Sem {s.semester})</option>)}
       </select>
     </Card>
-    <Card title="2. Classroom Photos (Camera or Upload)">
+    <Card title="2. Classroom Photos (Live Camera Only)">
       <CameraCapture facingMode="environment" maxPhotos={5} capturedCount={files.length}
         onCapture={file=>{if(files.length<5)setFiles(prev=>[...prev,file])}}
         disabled={!selected||loading}/>
@@ -732,7 +704,7 @@ function FaceAttendance() {
             </button>)}
         </div>
       </div>}
-      <p className="hint">Maximum 5 photos, 5 MB each. Wide angles with good lighting recommended.</p>
+      <p className="hint">Maximum 5 live photos, 5 MB each. Capture wide angles with good lighting.</p>
       <button className="primary" disabled={!selected||!files.length||loading} onClick={run}>
         {loading?"Recognizing faces...":"Start Face Attendance"}
       </button>
@@ -1129,7 +1101,7 @@ function StudentFace() {
 
     try {
       const d = await api("/student/me/face", { method: "POST", body: fd });
-      setMsg(d.message || "Face registered successfully.");
+      setMsg(d.message || "Face registered successfully with AttendAI Face Engine.");
       setIsSuccess(true);
       loadProfile();
     } catch (e) {
@@ -1143,7 +1115,7 @@ function StudentFace() {
   return (
     <PageSection
       title="Face Registration"
-      subtitle="Use the live camera or upload a clear photo. Face recognition connects with Luxand Cloud & AttendAI Engine."
+      subtitle="Use the live camera to capture your face. Face recognition registers your face with AttendAI Face Engine."
     >
       {profile && (
         <div
@@ -1167,7 +1139,7 @@ function StudentFace() {
             <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#64748b" }}>
               {profile.face_registered
                 ? "Your face is saved in the attendance database. You can submit a new photo anytime to update it."
-                : "Please capture your face or upload a clear photo to register."}
+                : "Please capture your face using the live camera to register."}
             </p>
           </div>
           <span
@@ -1187,7 +1159,7 @@ function StudentFace() {
 
       {msg && !preview && <Alert text={msg} />}
 
-      <Card title="Register / Update Face">
+      <Card title="Register / Update Face (Live Camera Only)">
         <CameraCapture
           facingMode="user"
           maxPhotos={1}

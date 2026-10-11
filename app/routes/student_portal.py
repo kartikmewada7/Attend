@@ -174,11 +174,7 @@ async def register_face(
     cache.delete_pattern("section_students:*")
     cache.delete_pattern("face_embeddings:*")
 
-    msg = (
-        "Face registered successfully with Luxand Cloud."
-        if luxand_success
-        else "Face registered successfully with AttendAI Face Engine. (Note: Luxand free trial can be activated in dashboard)."
-    )
+    msg = "Face registered successfully with AttendAI Face Engine."
 
     return {
         "message": msg,
